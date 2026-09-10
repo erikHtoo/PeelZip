@@ -1,0 +1,2 @@
+# Python 3.14+ has native Zstandard ZIP support.
+backports.zstd==1.7.0; python_version < "3.14"
