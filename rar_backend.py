@@ -52,6 +52,8 @@ def inspect(source, decoder=None):
     # values as integers when present so the aggressive engine can validate
     # ranges without reparsing 7-Zip text output.
     for entry in entries:
+        if 'Packed Size' in entry and 'PackSize' not in entry:
+            entry['PackSize'] = entry['Packed Size']
         for key in ('Offset', 'PackSize', 'Size'):
             if key in entry:
                 try:
