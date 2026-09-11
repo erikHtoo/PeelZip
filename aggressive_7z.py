@@ -50,11 +50,11 @@ def inspect(source, decoder):
     for entry in entries:
         if entry.get('Encrypted') == '+':
             raise RuntimeError('encrypted 7z archives are not supported in aggressive mode')
-        if entry.get('Block') is None or entry.get('Offset') is None:
+        if entry.get('Block') is None:
             raise RuntimeError(f'missing block metadata for {entry.get("Path", "entry")}')
         block = int(entry['Block'])
         if block not in blocks:
-            if not entry.get('Packed Size'):
+            if not entry.get('Offset') or not entry.get('Packed Size'):
                 raise RuntimeError(f'missing packed size for block {block}')
             blocks[block] = {
                 'block': block,
