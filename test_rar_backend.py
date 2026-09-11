@@ -11,12 +11,14 @@ class Tests(unittest.TestCase):
             with self.assertRaisesRegex(FileNotFoundError, '7-Zip or WinRAR'):
                 app.inspect('missing.rar')
     def test_inspect_parses_listing(self):
-        output='''Type = Rar5\nSolid = -\nMultivolume = -\nEncrypted = -\n\nPath = game/file.bin\nFolder = -\nSize = 123\n\nPath = game\nFolder = +\n'''
+        output='''Type = Rar5\nSolid = -\nMultivolume = -\nEncrypted = -\n\nPath = game/file.bin\nFolder = -\nSize = 123\nPackSize = 77\nOffset = 4096\n\nPath = game\nFolder = +\n'''
         fake=Path('fake-7z.exe')
         completed=type('R',(),{'returncode':0,'stdout':output,'stderr':''})()
         with patch.object(app.subprocess, 'run', return_value=completed):
             result=app.inspect('x.rar',fake)
         self.assertEqual(result['entries'][0]['Path'],'game/file.bin')
+        self.assertEqual(result['entries'][0]['Offset'],4096)
+        self.assertTrue(app.aggressive_supported(result)[0])
         self.assertFalse(result['solid'])
     def test_aggressive_is_explicitly_unavailable(self):
         self.assertEqual(app.aggressive_supported({})[0],False)

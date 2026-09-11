@@ -48,6 +48,16 @@ def inspect(source, decoder=None):
             key, value = line.split(' = ', 1)
             if key in {'Solid', 'Multivolume', 'Encrypted', 'Type', 'Volumes', 'Blocks', 'Method'} and key not in header:
                 header[key] = value.strip()
+    # Native bridge builds may expose the physical compressed-data range. Keep
+    # values as integers when present so the aggressive engine can validate
+    # ranges without reparsing 7-Zip text output.
+    for entry in entries:
+        for key in ('Offset', 'PackSize', 'Size'):
+            if key in entry:
+                try:
+                    entry[key] = int(entry[key])
+                except ValueError:
+                    pass
     return dict(decoder=str(decoder), entries=entries, solid=header.get('Solid') == '+',
                 multipart=header.get('Multivolume') == '+', encrypted=header.get('Encrypted') == '+', header=header)
 
@@ -66,5 +76,11 @@ def extract(source, destination, decoder=None, progress=None):
 
 
 def aggressive_supported(metadata):
-    """RAR aggressive reclamation is unavailable through CLI decoders."""
-    return False, 'RAR compressed byte boundaries require a native decoder API; 7-Zip CLI cannot expose them safely'
+    """Return whether metadata contains enough native range information."""
+    if metadata.get('solid') or metadata.get('multipart') or metadata.get('encrypted'):
+        return False, 'solid, multipart, and encrypted RAR archives are not eligible'
+    if not metadata.get('entries'):
+        return False, 'RAR contains no extractable entries'
+    if not all('Offset' in e and 'PackSize' in e for e in metadata['entries']):
+        return False, 'native RAR data offsets are unavailable from this decoder'
+    return True, 'native compressed ranges available; extraction lifecycle validation required'
