@@ -16,6 +16,7 @@ ROOT = Path(__file__).resolve().parent
 NORMAL = ROOT / 'shrink_unzip.py'
 AGGRESSIVE = ROOT / 'aggressive_zstd_zip.py'
 AGGRESSIVE_RAR = ROOT / 'aggressive_rar.py'
+AGGRESSIVE_7Z = ROOT / 'aggressive_7z.py'
 RAR = ROOT / 'rar_extract.py'
 PYTHON = sys.executable
 
@@ -70,7 +71,7 @@ class App(tk.Tk):
         parent.columnconfigure(1, weight=1)
 
     def _browse_zip(self):
-        path = filedialog.askopenfilename(title='Choose archive', filetypes=[('ZIP/RAR archives','*.zip *.rar'),('ZIP archives','*.zip'),('RAR archives','*.rar'),('All files','*.*')])
+        path = filedialog.askopenfilename(title='Choose archive', filetypes=[('ZIP/RAR/7z archives','*.zip *.rar *.7z'),('ZIP archives','*.zip'),('RAR archives','*.rar'),('7z archives','*.7z'),('All files','*.*')])
         if path: self.zip_var.set(path); self._suggest_dest()
 
     def _browse_dest(self):
@@ -94,19 +95,28 @@ class App(tk.Tk):
             return
         source, dest = self.zip_var.get().strip(), self.dest_var.get().strip()
         if not source or not dest: messagebox.showerror('Missing path', 'Choose both an archive and destination folder.'); return
+        if Path(source).suffix.lower() == '.7z' and self.mode.get() != 'aggressive':
+            messagebox.showinfo('7z mode', 'PeelZip currently supports 7z only in aggressive storage-saving mode. Use 7-Zip for ordinary extraction.')
+            return
         if execute and self.mode.get() == 'aggressive':
             ok = messagebox.askyesno('Aggressive mode warning', 'This mode permanently reclaims source archive ranges. An interruption may corrupt the archive. Continue?')
             if not ok: return
         script = AGGRESSIVE if self.mode.get() == 'aggressive' else NORMAL
         if Path(source).suffix.lower() == '.rar':
             script = AGGRESSIVE_RAR if self.mode.get() == 'aggressive' else RAR
+        if Path(source).suffix.lower() == '.7z':
+            script = AGGRESSIVE_7Z
         args = [PYTHON, '-u', str(script), source, dest]
         if execute:
             if self.mode.get() == 'normal':
                 args += ['--execute', '--accept-data-loss-risk']
             elif Path(source).suffix.lower() == '.rar' and self.verify_var.get():
                 args += ['--verify']
+            elif Path(source).suffix.lower() == '.7z' and self.verify_var.get():
+                args += ['--verify']
             if self.mode.get() == 'aggressive' and Path(source).suffix.lower() == '.rar' and self.resume_var.get():
+                args += ['--resume']
+            if self.mode.get() == 'aggressive' and Path(source).suffix.lower() == '.7z' and self.resume_var.get():
                 args += ['--resume']
         self.progress.configure(value=0); self.current.set(''); self._append('$ ' + ' '.join('"'+x+'"' if ' ' in x else x for x in args))
         self._set_running(True)
