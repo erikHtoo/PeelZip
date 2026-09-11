@@ -23,7 +23,7 @@ PYTHON = sys.executable
 class App(tk.Tk):
     def __init__(self):
         super().__init__()
-        self.title('Shrink Unzip')
+        self.title('PeelUnzip')
         self.geometry('760x560')
         self.minsize(680, 480)
         self.events = queue.Queue()
@@ -33,7 +33,7 @@ class App(tk.Tk):
 
     def _build(self):
         outer = ttk.Frame(self, padding=18); outer.pack(fill='both', expand=True)
-        ttk.Label(outer, text='Shrink Unzip', font=('Segoe UI', 18, 'bold')).pack(anchor='w')
+        ttk.Label(outer, text='PeelUnzip', font=('Segoe UI', 18, 'bold')).pack(anchor='w')
         ttk.Label(outer, text='Extract large archives while reclaiming source storage.', foreground='#555').pack(anchor='w', pady=(0, 16))
         form = ttk.LabelFrame(outer, text='Archive and destination', padding=12); form.pack(fill='x')
         self.zip_var = tk.StringVar(); self.dest_var = tk.StringVar()
@@ -137,7 +137,7 @@ class App(tk.Tk):
                 elif kind == 'done':
                     code = value; self.proc = None; self._set_running(False)
                     self.status.set('Finished successfully.' if code == 0 else f'Stopped with exit code {code}.')
-                    if code == 0: messagebox.showinfo('Shrink Unzip', 'Operation completed.')
+                    if code == 0: messagebox.showinfo('PeelUnzip', 'Operation completed.')
                 elif kind == 'error':
                     self.proc = None; self._set_running(False); self.status.set('Could not start operation.'); self._append(value); messagebox.showerror('Error', value)
         except queue.Empty: pass
