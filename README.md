@@ -1,4 +1,4 @@
-# PeelUnzip — experimental Windows CLI
+# PeelZip — experimental Windows CLI
 
 Extract a local ZIP into a new folder on the same volume, reclaiming archive space after each complete file. Python 3.10 or later. Zstandard ZIP support is built into Python 3.14+; older Python versions need the dependency below. Tested on Windows using disposable archives, not by destructively extracting a 50 GB production archive.
 
@@ -93,3 +93,4 @@ Solid, multipart, and encrypted archives are currently rejected by aggressive mo
 7z detection and ordinary extraction still need to be wired into the UI. Aggressive 7z support requires parsing folder/block boundaries and processing complete solid folders, rather than reclaiming arbitrary byte ranges. Multipart coordination, encrypted archives, and resumable aggressive RAR journals remain future work.
 
 See `TEST_REPORT.md` for measured results and limitations. `realistic-test.zip` is the preserved generated fixture; use a copy when testing destructive extraction.
+
