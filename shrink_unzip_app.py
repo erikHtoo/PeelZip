@@ -15,6 +15,7 @@ from tkinter import filedialog, messagebox, ttk
 ROOT = Path(__file__).resolve().parent
 NORMAL = ROOT / 'shrink_unzip.py'
 AGGRESSIVE = ROOT / 'aggressive_zstd_zip.py'
+AGGRESSIVE_RAR = ROOT / 'aggressive_rar.py'
 RAR = ROOT / 'rar_extract.py'
 PYTHON = sys.executable
 
@@ -93,12 +94,11 @@ class App(tk.Tk):
             if not ok: return
         script = AGGRESSIVE if self.mode.get() == 'aggressive' else NORMAL
         if Path(source).suffix.lower() == '.rar':
-            if self.mode.get() == 'aggressive':
-                messagebox.showinfo('RAR aggressive mode unavailable', 'RAR currently supports decoder-backed normal extraction only. Aggressive RAR reclamation needs a native decoder API.'); return
-            script = RAR
+            script = AGGRESSIVE_RAR if self.mode.get() == 'aggressive' else RAR
         args = [PYTHON, '-u', str(script), source, dest]
         if execute:
-            args += ['--execute', '--accept-data-loss-risk'] if self.mode.get() == 'normal' else ['--accept-data-loss-risk']
+            if self.mode.get() == 'normal':
+                args += ['--execute', '--accept-data-loss-risk']
         self.progress.configure(value=0); self.current.set(''); self._append('$ ' + ' '.join('"'+x+'"' if ' ' in x else x for x in args))
         self._set_running(True)
         threading.Thread(target=self._worker, args=(args,), daemon=True).start()
