@@ -1,4 +1,4 @@
-# Shrink Unzip — experimental Windows CLI
+# PeelUnzip — experimental Windows CLI
 
 Extract a local ZIP into a new folder on the same volume, reclaiming archive space after each complete file. Python 3.10 or later. Zstandard ZIP support is built into Python 3.14+; older Python versions need the dependency below. Tested on Windows using disposable archives, not by destructively extracting a 50 GB production archive.
 
@@ -86,8 +86,10 @@ The Zstandard aggressive path has two passing tests covering output equality, so
 
 ## RAR support status
 
-`rar_backend.py` adds decoder discovery, structured RAR listing, and normal extraction through an installed 7-Zip or WinRAR/UnRAR executable. It detects solid, multipart, and encrypted archives. Install 7-Zip or WinRAR before using it. The command-line decoders do not expose reliable compressed-byte boundaries, so RAR aggressive reclamation is deliberately refused for now. A native UnRAR integration is required before source ranges can be reclaimed safely; solid archives would reclaim only at solid-block boundaries.
+`rar_backend.py` adds decoder discovery, structured RAR listing, and normal extraction through the bundled native 7-Zip decoder or an installed compatible executable. Aggressive RAR is supported for non-solid, single-volume, unencrypted archives. It extracts one entry at a time, optionally verifies its CRC, then reclaims that entry's packed source range. The source keeps its logical length but is intentionally no longer usable as a normal RAR after reclamation.
 
-The desktop UI accepts `.rar` files and routes them to the decoder-backed normal extractor. Selecting aggressive mode for RAR shows an explanation and does not touch the archive.
+Solid, multipart, and encrypted archives are currently rejected by aggressive mode. The desktop UI accepts `.zip` and `.rar` files and shows per-entry progress.
+
+7z detection and ordinary extraction still need to be wired into the UI. Aggressive 7z support requires parsing folder/block boundaries and processing complete solid folders, rather than reclaiming arbitrary byte ranges. Multipart coordination, encrypted archives, and resumable aggressive RAR journals remain future work.
 
 See `TEST_REPORT.md` for measured results and limitations. `realistic-test.zip` is the preserved generated fixture; use a copy when testing destructive extraction.
