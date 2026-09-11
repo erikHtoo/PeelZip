@@ -8,6 +8,7 @@ length but is no longer a valid normal RAR after reclamation.
 from __future__ import annotations
 
 import argparse
+import binascii
 from pathlib import Path
 import subprocess
 
@@ -15,7 +16,16 @@ import ntfs_reclaim
 import rar_backend
 
 
-def extract_aggressive(source, destination, decoder=None, progress=None, dry_run=False):
+def _crc32(path):
+    value = 0
+    with path.open('rb') as stream:
+        for block in iter(lambda: stream.read(1024 * 1024), b''):
+            value = binascii.crc32(block, value)
+    return f'{value & 0xffffffff:08X}'
+
+
+def extract_aggressive(source, destination, decoder=None, progress=None,
+                       dry_run=False, verify=False):
     source = Path(source).absolute()
     destination = Path(destination).absolute()
     if destination.exists() and any(destination.iterdir()):
@@ -42,6 +52,14 @@ def extract_aggressive(source, destination, decoder=None, progress=None, dry_run
                                 encoding='utf-8', errors='replace', check=False)
         if result.returncode != 0:
             raise RuntimeError(f"7zz failed for {name}: {result.stdout[-1000:]}")
+        if verify and entry.get('CRC'):
+            output_path = destination.joinpath(*name.replace('\\', '/').split('/'))
+            if not output_path.is_file():
+                raise RuntimeError(f"extracted file missing for verification: {name}")
+            actual = _crc32(output_path)
+            expected = str(entry['CRC']).upper()
+            if actual != expected:
+                raise RuntimeError(f"CRC mismatch for {name}: expected {expected}, got {actual}")
         if packed:
             ntfs_reclaim.reclaim_range(source, offset, packed)
             reclaimed += packed
@@ -56,9 +74,11 @@ def main():
     parser.add_argument('destination')
     parser.add_argument('--decoder')
     parser.add_argument('--dry-run', action='store_true')
+    parser.add_argument('--verify', action='store_true',
+                        help='verify each extracted file CRC before reclaiming its RAR range')
     args = parser.parse_args()
     result = extract_aggressive(args.source, args.destination,
-                                args.decoder, print, args.dry_run)
+                                args.decoder, print, args.dry_run, args.verify)
     print(result)
 
 

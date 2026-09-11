@@ -41,10 +41,13 @@ class App(tk.Tk):
         self._row(form, 1, 'Destination', self.dest_var, self._browse_dest)
         mode = ttk.LabelFrame(outer, text='Mode', padding=12); mode.pack(fill='x', pady=(14, 0))
         self.mode = tk.StringVar(value='normal')
+        self.verify_var = tk.BooleanVar(value=True)
         ttk.Radiobutton(mode, text='Conservative (recommended)', variable=self.mode, value='normal', command=self._mode_changed).grid(row=0,column=0,sticky='w')
         ttk.Label(mode, text='Resumable per-file extraction; keeps normal ZIP behavior until completion.', foreground='#555').grid(row=1,column=0,sticky='w',padx=25)
         ttk.Radiobutton(mode, text='Aggressive experimental', variable=self.mode, value='aggressive', command=self._mode_changed).grid(row=2,column=0,sticky='w',pady=(10,0))
         ttk.Label(mode, text='Streams stored/Zstandard entries and reclaims source ranges; interruption can corrupt the archive.', foreground='#9b4d00', wraplength=650).grid(row=3,column=0,sticky='w',padx=25)
+        ttk.Checkbutton(mode, text='Verify extracted files before reclaiming (slower, safer)', variable=self.verify_var).grid(row=4,column=0,sticky='w',padx=25,pady=(8,0))
+        ttk.Label(mode, text='For aggressive RAR, checks each file CRC before its source bytes are reclaimed. Storage savings are unchanged.', foreground='#555', wraplength=650).grid(row=5,column=0,sticky='w',padx=45)
         controls = ttk.Frame(outer); controls.pack(fill='x', pady=(14,0))
         self.preview_btn = ttk.Button(controls, text='Preview space', command=lambda: self._start(False)); self.preview_btn.pack(side='left')
         self.run_btn = ttk.Button(controls, text='Start extraction', command=lambda: self._start(True)); self.run_btn.pack(side='left', padx=8)
@@ -99,6 +102,8 @@ class App(tk.Tk):
         if execute:
             if self.mode.get() == 'normal':
                 args += ['--execute', '--accept-data-loss-risk']
+            elif Path(source).suffix.lower() == '.rar' and self.verify_var.get():
+                args += ['--verify']
         self.progress.configure(value=0); self.current.set(''); self._append('$ ' + ' '.join('"'+x+'"' if ' ' in x else x for x in args))
         self._set_running(True)
         threading.Thread(target=self._worker, args=(args,), daemon=True).start()
