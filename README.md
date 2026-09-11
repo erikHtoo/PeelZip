@@ -90,7 +90,10 @@ The Zstandard aggressive path has two passing tests covering output equality, so
 
 Solid, multipart, and encrypted archives are currently rejected by aggressive mode. The desktop UI accepts `.zip` and `.rar` files and shows per-entry progress.
 
-7z detection and ordinary extraction still need to be wired into the UI. Aggressive 7z support requires parsing folder/block boundaries and processing complete solid folders, rather than reclaiming arbitrary byte ranges. Multipart coordination, encrypted archives, and resumable aggressive RAR journals remain future work.
+Ordinary 7z extraction is intentionally out of scope for PeelZip because users can already use 7-Zip for that.
+Aggressive 7z support requires parsing folder/block boundaries and processing complete solid folders, rather than
+reclaiming arbitrary byte ranges. Multipart coordination, encrypted archives, and resumable aggressive RAR journals
+remain future work.
 
 See `TEST_REPORT.md` for measured results and limitations. `realistic-test.zip` is the preserved generated fixture; use a copy when testing destructive extraction.
 
