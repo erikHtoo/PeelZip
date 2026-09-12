@@ -234,8 +234,8 @@ class App(tk.Tk):
 
     def _worker(self, args, check_password=True):
         try:
-            if check_password and archive_password.required(args[3], ROOT/'tools'/'7zz.exe'):
-                if Path(args[2]) not in (AGGRESSIVE, AGGRESSIVE_RAR, AGGRESSIVE_7Z):
+            if check_password and archive_password.required(Path(args[2]), ROOT/'tools'/'7zz.exe'):
+                if Path(args[1]).resolve() not in {p.resolve() for p in (AGGRESSIVE, AGGRESSIVE_RAR, AGGRESSIVE_7Z)}:
                     raise ValueError('Encrypted archives require aggressive mode in PeelZip.')
                 reply = queue.Queue(maxsize=1)
                 self.events.put(('password', reply))
