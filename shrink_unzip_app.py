@@ -11,6 +11,7 @@ import sys
 import threading
 import tkinter as tk
 import archive_kind
+from ui_help import HELP, HelpButton
 from tkinter import filedialog, messagebox, ttk
 
 ROOT = Path(__file__).resolve().parent
@@ -84,7 +85,7 @@ class App(tk.Tk):
         ttk.Label(header, text='peelzip', font=('Segoe UI Semibold',19)).pack(side='left')
         self.zip_var = tk.StringVar(); self.dest_var = tk.StringVar(); self.password_var = tk.StringVar()
         card = ttk.Frame(outer, style='Card.TFrame', padding=18); card.pack(fill='x')
-        self._row(card, 0, 'Archive', self.zip_var, self._browse_zip)
+        self._row(card, 0, 'Source', self.zip_var, self._browse_zip)
         self._row(card, 1, 'Destination', self.dest_var, self._browse_dest)
         self.file_hint = tk.StringVar(value='')
         ttk.Label(card, textvariable=self.file_hint, style='Hint.TLabel').grid(row=2,column=0,columnspan=3,sticky='w',pady=(8,0))
@@ -93,14 +94,21 @@ class App(tk.Tk):
         self.mode = tk.StringVar(value='aggressive'); self.verify_var = tk.BooleanVar(value=True); self.resume_var = tk.BooleanVar(value=False)
         for column, value, title in [(0,'aggressive','Aggressive'),(1,'normal','Conservative')]:
             frame=ttk.Frame(modes,style='Card.TFrame',padding=14);frame.grid(row=0,column=column,sticky='nsew',padx=(0,8) if column==0 else (8,0))
-            ttk.Radiobutton(frame,text=title,value=value,variable=self.mode,command=self._mode_changed).pack(anchor='w')
+            ttk.Radiobutton(frame,text=title,value=value,variable=self.mode,command=self._mode_changed).pack(side='left')
+            HelpButton(frame,HELP[value],background='#1b211c').pack(side='right')
         self.mode_hint=tk.StringVar(value='Source bytes are consumed. An interrupted run may need a new download.')
-        self.options_btn=ttk.Button(outer,text='ï¼‹  Options',command=self._toggle_options);self.options_btn.pack(anchor='w')
+        self.options_btn=ttk.Button(outer,text='Options',command=self._toggle_options);self.options_btn.pack(anchor='w')
         self.options=ttk.Frame(outer,padding=(0,8))
-        ttk.Label(self.options,text='Password',style='Muted.TLabel').grid(row=0,column=0,sticky='w')
-        ttk.Entry(self.options,textvariable=self.password_var,show='â€¢',width=24).grid(row=0,column=1,sticky='w',padx=12)
-        ttk.Checkbutton(self.options,text='Verify output',variable=self.verify_var).grid(row=1,column=0,columnspan=2,sticky='w',pady=(8,0))
-        ttk.Checkbutton(self.options,text='Resume completed files',variable=self.resume_var).grid(row=2,column=0,columnspan=2,sticky='w')
+        password_row=ttk.Frame(self.options);password_row.grid(row=0,column=0,sticky='w')
+        ttk.Label(password_row,text='Password',style='Muted.TLabel').pack(side='left')
+        HelpButton(password_row,HELP['password']).pack(side='left',padx=8)
+        ttk.Entry(self.options,textvariable=self.password_var,show='\u2022',width=24).grid(row=0,column=1,sticky='w',padx=12)
+        verify_row=ttk.Frame(self.options);verify_row.grid(row=1,column=0,columnspan=2,sticky='w',pady=(6,0))
+        ttk.Checkbutton(verify_row,text='Verify output',variable=self.verify_var).pack(side='left')
+        HelpButton(verify_row,HELP['verify']).pack(side='left',padx=8)
+        resume_row=ttk.Frame(self.options);resume_row.grid(row=2,column=0,columnspan=2,sticky='w',pady=(6,0))
+        ttk.Checkbutton(resume_row,text='Resume completed files',variable=self.resume_var).pack(side='left')
+        HelpButton(resume_row,HELP['resume']).pack(side='left',padx=8)
         self.activity=ttk.Frame(outer,padding=(0,16));self.activity.pack(fill='x')
         line=ttk.Frame(self.activity);line.pack(fill='x')
         self.status=tk.StringVar(value='Ready');self.percent=tk.StringVar(value='0%')
@@ -110,10 +118,14 @@ class App(tk.Tk):
         self.current=tk.StringVar(value='')
         ttk.Label(self.activity,textvariable=self.current,style='Muted.TLabel',wraplength=770,font=('Segoe UI',9)).pack(anchor='w')
         self.controls=ttk.Frame(outer);self.controls.pack(fill='x',pady=(0,8))
-        self.preview_btn=ttk.Button(self.options,text='Preview space',command=lambda:self._start(False));self.preview_btn.grid(row=3,column=0,sticky='w',pady=(8,0))
+        preview_row=ttk.Frame(self.options);preview_row.grid(row=3,column=0,sticky='w',pady=(8,0))
+        self.preview_btn=ttk.Button(preview_row,text='Preview space',command=lambda:self._start(False));self.preview_btn.pack(side='left')
+        HelpButton(preview_row,HELP['preview']).pack(side='left',padx=8)
         self.stop_btn=ttk.Button(self.controls,text='Stop',command=self._stop,state='disabled');self.stop_btn.pack_forget()
-        self.run_btn=ttk.Button(self.controls,text='Extract archive  â†’',style='Primary.TButton',command=lambda:self._start(True));self.run_btn.pack(side='right')
-        self.log_btn=ttk.Button(outer,text='ï¼‹  Activity log',command=self._toggle_log);self.log_btn.pack(anchor='w',pady=(4,0))
+        self.run_btn=ttk.Button(self.controls,text='Extract',style='Primary.TButton',command=lambda:self._start(True));self.run_btn.pack(side='right')
+        log_row=ttk.Frame(outer);log_row.pack(anchor='w',pady=(4,0))
+        self.log_btn=ttk.Button(log_row,text='Activity log',command=self._toggle_log);self.log_btn.pack(side='left')
+        HelpButton(log_row,HELP['log']).pack(side='left',padx=8)
         self.log_frame=ttk.Frame(outer,padding=(0,8))
         self.log=tk.Text(self.log_frame,height=5,state='disabled',wrap='word',bg='#0c100d',fg='#a9b7aa',insertbackground='#d6f578',relief='flat',padx=12,pady=10,font=('Consolas',9))
         self.log.pack(fill='both',expand=True)
@@ -127,16 +139,16 @@ class App(tk.Tk):
 
     def _toggle_options(self):
         if self.options.winfo_manager():
-            self.options.pack_forget();self.options_btn.configure(text='ï¼‹  Options')
+            self.options.pack_forget();self.options_btn.configure(text='Options')
         else:
-            self.options.pack(fill='x',before=self.activity);self.options_btn.configure(text='âˆ’  Options')
+            self.options.pack(fill='x',before=self.activity);self.options_btn.configure(text='Hide options')
 
 
     def _toggle_log(self):
         if self.log_frame.winfo_manager():
-            self.log_frame.pack_forget();self.log_btn.configure(text='ï¼‹  Activity log')
+            self.log_frame.pack_forget();self.log_btn.configure(text='Activity log')
         else:
-            self.log_frame.pack(fill='both',expand=True);self.log_btn.configure(text='âˆ’  Activity log')
+            self.log_frame.pack(fill='both',expand=True);self.log_btn.configure(text='Hide log')
 
 
     def _file_summary(self, *args):
@@ -144,7 +156,7 @@ class App(tk.Tk):
         path=Path(self.zip_var.get())
         try:
             kind=archive_kind.detect(path)
-            self.file_hint.set(f'{(kind or "Unknown format").upper()}  Â·  {path.stat().st_size/1024**3:.2f} GiB archive  Â·  {shutil.disk_usage(path.parent).free/1024**3:.2f} GiB free')
+            self.file_hint.set(f'{(kind or "Unknown format").upper()}  \xb7  {path.stat().st_size/1024**3:.2f} GiB archive  \xb7  {shutil.disk_usage(path.parent).free/1024**3:.2f} GiB free')
         except (OSError,ValueError):
             self.file_hint.set('')
 
@@ -217,7 +229,7 @@ class App(tk.Tk):
                 args += ['--password', self.password_var.get()]
         if execute and kind == 'zip' and self.mode.get() == 'aggressive' and not self.verify_var.get():
             args.append('--no-verify')
-        self.status.set('Extractingâ€¦' if execute else 'Calculating spaceâ€¦')
+        self.status.set('Extracting\u2026' if execute else 'Calculating space\u2026')
         self.percent.set('0%')
         self.active_file = (0, 1)
         display_args = ['-p********' if x.startswith('--password') else ('********' if i and args[i-1] == '--password' else x) for i, x in enumerate(args)]
@@ -236,7 +248,7 @@ class App(tk.Tk):
     def _stop(self):
         if self.proc and self.proc.poll() is None:
             if messagebox.askyesno('Stop extraction?', 'Stopping may leave a partial output. Resume only according to the mode documentation.'):
-                self.proc.terminate(); self.status.set('StoppingÃ¢â‚¬Â¦')
+                self.proc.terminate(); self.status.set('Stopping\xe2\u20ac\xa6')
 
     def _poll(self):
         try:
@@ -256,7 +268,7 @@ class App(tk.Tk):
                             index,count=getattr(self,'active_file',(0,1))
                             value_pct=min(99.9,100*(index+done/total)/count)
                             self.progress.configure(value=value_pct);self.percent.set(f'{value_pct:.0f}%')
-                            self.current.set(f'{match[3]}  Â·  {done/1024**2:.0f} / {total/1024**2:.0f} MiB')
+                            self.current.set(f'{match[3]}  \xb7  {done/1024**2:.0f} / {total/1024**2:.0f} MiB')
                     elif value.startswith('ZIP:') or value.startswith('Estimated'):
                         self.status.set(value)
                     elif value.startswith('Complete'):
