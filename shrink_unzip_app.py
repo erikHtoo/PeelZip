@@ -21,6 +21,11 @@ RAR = ROOT / 'rar_extract.py'
 PYTHON = sys.executable
 
 
+def _is_zip_path(path):
+    value = str(path).lower()
+    return value.endswith(('.zip', '.zip.001')) or re.search(r'\.z\d\d$', value) is not None
+
+
 class App(tk.Tk):
     def __init__(self):
         super().__init__()
@@ -74,7 +79,7 @@ class App(tk.Tk):
         parent.columnconfigure(1, weight=1)
 
     def _browse_zip(self):
-        path = filedialog.askopenfilename(title='Choose archive', filetypes=[('ZIP/RAR/7z archives','*.zip *.rar *.7z'),('ZIP archives','*.zip'),('RAR archives','*.rar'),('7z archives','*.7z'),('All files','*.*')])
+        path = filedialog.askopenfilename(title='Choose archive', filetypes=[('ZIP/RAR/7z archives','*.zip *.zip.001 *.z01 *.rar *.7z'),('ZIP archives','*.zip *.zip.001 *.z01'),('RAR archives','*.rar'),('7z archives','*.7z'),('All files','*.*')])
         if path: self.zip_var.set(path); self._suggest_dest()
 
     def _browse_dest(self):
@@ -109,6 +114,8 @@ class App(tk.Tk):
             script = AGGRESSIVE_RAR if self.mode.get() == 'aggressive' else RAR
         if Path(source).suffix.lower() == '.7z':
             script = AGGRESSIVE_7Z
+        if _is_zip_path(source) and self.mode.get() == 'aggressive':
+            script = AGGRESSIVE
         args = [PYTHON, '-u', str(script), source, dest]
         if execute:
             if self.mode.get() == 'normal':
@@ -121,9 +128,9 @@ class App(tk.Tk):
                 args += ['--resume']
             if self.mode.get() == 'aggressive' and Path(source).suffix.lower() == '.7z' and self.resume_var.get():
                 args += ['--resume']
-            if self.mode.get() == 'aggressive' and Path(source).suffix.lower() == '.zip' and self.resume_var.get():
+            if self.mode.get() == 'aggressive' and _is_zip_path(source) and self.resume_var.get():
                 args += ['--resume']
-            if self.mode.get() == 'aggressive' and Path(source).suffix.lower() in {'.zip', '.rar', '.7z'} and self.password_var.get():
+            if self.mode.get() == 'aggressive' and (_is_zip_path(source) or Path(source).suffix.lower() in {'.rar', '.7z'}) and self.password_var.get():
                 args += ['--password', self.password_var.get()]
         display_args = ['-p********' if x.startswith('--password') else ('********' if i and args[i-1] == '--password' else x) for i, x in enumerate(args)]
         self.progress.configure(value=0); self.current.set(''); self._append('$ ' + ' '.join('"'+x+'"' if ' ' in x else x for x in display_args))
