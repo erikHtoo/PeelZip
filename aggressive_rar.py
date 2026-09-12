@@ -99,6 +99,11 @@ def extract_aggressive(source, destination, decoder=None, progress=None,
     for e in entries:
         try: starts.append(int(e.get('Volume Index', 0)))
         except (TypeError, ValueError): starts.append(0)
+    if not multipart:
+        ranges = sorted((int(e['Offset']), int(e['Offset']) + int(e.get('PackSize', 0)), e['Path']) for e in entries if e.get('PackSize'))
+        for (a0, a1, an), (b0, b1, bn) in zip(ranges, ranges[1:]):
+            if b0 < a1:
+                raise RuntimeError(f'overlapping RAR ranges: {an} and {bn}')
     journal_path = _state_path(destination)
     state = _load_state(journal_path, first_volume, entries) if resume else {
         'version': 1, 'source': str(first_volume), 'entries': {}, 'volumes': [str(v) for v in volumes]

@@ -198,6 +198,17 @@ def run(source, destination, decoder=None, verify=True, progress=None,
         infos.sort(key=lambda item: item.header_offset, reverse=True)
     if split:
         infos.sort(key=lambda item: item['header_offset'], reverse=True)
+    # Validate all compressed ranges before modifying the source. Overlap means
+    # the decoder metadata is not a trustworthy physical map.
+    ranges = []
+    for info in infos:
+        packed = info['compress_size'] if split else info.compress_size
+        if not packed: continue
+        local = (_split_data_offset(volumes, info['header_offset']) if split else _data_offset(source, info))
+        ranges.append((local, local + packed, info['filename'] if split else info.filename))
+    for (a0, a1, an), (b0, b1, bn) in zip(sorted(ranges), sorted(ranges)[1:]):
+        if b0 < a1:
+            raise RuntimeError(f'overlapping compressed ranges: {an} and {bn}')
     journal_path = _state_path(destination)
     if resume and journal_path.exists():
         state = json.loads(journal_path.read_text(encoding='utf-8'))
