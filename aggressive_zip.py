@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 import struct
 import subprocess
+import re
 import zlib
 import zipfile
 
@@ -24,20 +25,60 @@ def _data_offset(source, info):
 
 
 def _split_volumes(source):
-    if not source.name.lower().endswith('.zip.001'):
+    lower = source.name.lower()
+    if lower.endswith('.zip.001'):
+        prefix = source.name[:-4]
+    elif re.search(r'\.z\d\d$', lower):
+        prefix = source.name[:-3]
+    else:
         return [source]
-    prefix = source.name[:-4]
     volumes = []
-    number = 1
-    while True:
-        path = source.with_name(f'{prefix}.{number:03d}')
-        if not path.is_file():
-            break
-        volumes.append(path)
-        number += 1
+    if lower.endswith('.zip.001'):
+        number = 1
+        while True:
+            path = source.with_name(f'{prefix}.{number:03d}')
+            if not path.is_file():
+                break
+            volumes.append(path)
+            number += 1
+    else:
+        number = 1
+        while True:
+            path = source.with_name(f'{prefix}z{number:02d}')
+            if not path.is_file():
+                break
+            volumes.append(path)
+            number += 1
+        final = source.with_name(f'{prefix}zip')
+        if final.is_file():
+            volumes.append(final)
     if not volumes:
         raise RuntimeError('split ZIP volume set is incomplete')
     return volumes
+
+
+def _validate_split_volumes(volumes, decoder):
+    result = subprocess.run([str(decoder), 'l', '-slt', str(volumes[0])],
+                            stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                            text=True, encoding='utf-8', errors='replace')
+    if result.returncode not in (0, 1):
+        raise RuntimeError('7zz could not inspect split ZIP volumes')
+    volume_match = re.search(r'^Volumes = (\d+)$', result.stdout, re.MULTILINE)
+    total_match = re.search(r'^Total Physical Size = (\d+)$', result.stdout, re.MULTILINE)
+    if not volume_match or not total_match:
+        raise RuntimeError('selected file is not a recognized split ZIP volume')
+    expected_count = int(volume_match.group(1))
+    expected_size = int(total_match.group(1))
+    actual_size = sum(path.stat().st_size for path in volumes)
+    if len(volumes) != expected_count:
+        raise RuntimeError(f'incomplete split ZIP set: found {len(volumes)}, expected {expected_count}')
+    if actual_size != expected_size:
+        raise RuntimeError(f'split ZIP size mismatch: found {actual_size}, expected {expected_size}')
+
+
+def _split_volumes_legacy(source):
+    """Kept as a named compatibility hook for callers importing the helper."""
+    return _split_volumes(source)
 
 
 def _split_read(volumes, offset, length):
@@ -147,6 +188,8 @@ def run(source, destination, decoder=None, verify=True, progress=None,
     destination.mkdir(parents=True, exist_ok=True)
     volumes = _split_volumes(source)
     split = len(volumes) > 1
+    if split:
+        _validate_split_volumes(volumes, decoder)
     if split:
         infos = _split_entries(source, decoder)
     else:
