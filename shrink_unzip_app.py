@@ -14,7 +14,7 @@ from tkinter import filedialog, messagebox, ttk
 
 ROOT = Path(__file__).resolve().parent
 NORMAL = ROOT / 'shrink_unzip.py'
-AGGRESSIVE = ROOT / 'aggressive_zstd_zip.py'
+AGGRESSIVE = ROOT / 'aggressive_zip.py'
 AGGRESSIVE_RAR = ROOT / 'aggressive_rar.py'
 AGGRESSIVE_7Z = ROOT / 'aggressive_7z.py'
 RAR = ROOT / 'rar_extract.py'
