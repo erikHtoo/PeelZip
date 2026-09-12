@@ -50,7 +50,7 @@ def inspect(source, decoder=None, password=None):
     for line in result.stdout.splitlines():
         if ' = ' in line:
             key, value = line.split(' = ', 1)
-            if key in {'Solid', 'Multivolume', 'Encrypted', 'Type', 'Volumes', 'Blocks', 'Method'} and key not in header:
+            if key in {'Solid', 'Multivolume', 'Encrypted', 'Type', 'Volumes', 'Blocks', 'Method', 'Total Physical Size'} and key not in header:
                 header[key] = value.strip()
     # Native bridge builds may expose the physical compressed-data range. Keep
     # values as integers when present so the aggressive engine can validate

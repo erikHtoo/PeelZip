@@ -57,7 +57,15 @@ def _rar_volumes(source):
     # Old RAR volume naming: archive.rar, archive.r00, archive.r01...
     if source.suffix.lower() == '.rar':
         stem = source.with_suffix('')
-        candidates = [source] + sorted(parent.glob(stem.name + '.r[0-9][0-9]'), key=lambda p: int(p.suffix[2:]))
+        # Legacy RAR volumes use archive.rar, archive.r00, archive.r01;
+        # accept the extended .s00/.t00 naming used after .r99 as well.
+        tail = []
+        import re
+        for candidate in parent.iterdir():
+            m = re.fullmatch(re.escape(stem.name) + r'\.([r-z])(\d{2})', candidate.name, re.I)
+            if m:
+                tail.append((ord(m.group(1).lower()) - ord('r')) * 100 + int(m.group(2)), candidate)
+        candidates = [source] + [p for _, p in sorted(tail)]
         if len(candidates) > 1: return candidates
     return [source]
 
