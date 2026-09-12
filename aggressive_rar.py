@@ -91,6 +91,13 @@ def extract_aggressive(source, destination, decoder=None, progress=None,
     decoder = Path(metadata['decoder'])
     entries = metadata['entries']
     multipart = len(volumes) > 1 or metadata.get('multipart')
+    if multipart:
+        expected = metadata.get('header', {}).get('Volumes')
+        if expected and int(expected) != len(volumes):
+            raise RuntimeError(f'incomplete RAR volume set: found {len(volumes)}, expected {expected}')
+        total = metadata.get('header', {}).get('Total Physical Size')
+        if total and int(total) != sum(v.stat().st_size for v in volumes):
+            raise RuntimeError('RAR volume sizes do not match archive metadata')
     # 7-Zip reports each entry's starting volume. For multipart archives we
     # reclaim complete volume files only after every entry beginning there (or
     # earlier and potentially spanning into it) has been extracted. This avoids
