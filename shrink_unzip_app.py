@@ -12,7 +12,8 @@ import threading
 import tkinter as tk
 import archive_kind
 from ui_help import HELP, HelpButton
-from tkinter import filedialog, messagebox, ttk
+from tkinter import filedialog, messagebox, simpledialog, ttk
+import archive_password
 
 ROOT = Path(__file__).resolve().parent
 NORMAL = ROOT / 'shrink_unzip.py'
@@ -83,7 +84,7 @@ class App(tk.Tk):
         except tk.TclError:
             pass
         ttk.Label(header, text='peelzip', font=('Segoe UI Semibold',19)).pack(side='left')
-        self.zip_var = tk.StringVar(); self.dest_var = tk.StringVar(); self.password_var = tk.StringVar()
+        self.zip_var = tk.StringVar(); self.dest_var = tk.StringVar()
         card = ttk.Frame(outer, style='Card.TFrame', padding=18); card.pack(fill='x')
         self._row(card, 0, 'Source', self.zip_var, self._browse_zip)
         self._row(card, 1, 'Destination', self.dest_var, self._browse_dest)
@@ -99,10 +100,6 @@ class App(tk.Tk):
         self.mode_hint=tk.StringVar(value='Source bytes are consumed. An interrupted run may need a new download.')
         self.options_btn=ttk.Button(outer,text='Options',command=self._toggle_options);self.options_btn.pack(anchor='w')
         self.options=ttk.Frame(outer,padding=(0,8))
-        password_row=ttk.Frame(self.options);password_row.grid(row=0,column=0,sticky='w')
-        ttk.Label(password_row,text='Password',style='Muted.TLabel').pack(side='left')
-        HelpButton(password_row,HELP['password']).pack(side='left',padx=8)
-        ttk.Entry(self.options,textvariable=self.password_var,show='\u2022',width=24).grid(row=0,column=1,sticky='w',padx=12)
         verify_row=ttk.Frame(self.options);verify_row.grid(row=1,column=0,columnspan=2,sticky='w',pady=(6,0))
         ttk.Checkbutton(verify_row,text='Verify output',variable=self.verify_var).pack(side='left')
         HelpButton(verify_row,HELP['verify']).pack(side='left',padx=8)
@@ -225,8 +222,6 @@ class App(tk.Tk):
                 args += ['--resume']
             if self.mode.get() == 'aggressive' and kind == 'zip' and self.resume_var.get():
                 args += ['--resume']
-            if self.mode.get() == 'aggressive' and kind in {'zip', 'rar', '7z'} and self.password_var.get():
-                args += ['--password', self.password_var.get()]
         if execute and kind == 'zip' and self.mode.get() == 'aggressive' and not self.verify_var.get():
             args.append('--no-verify')
         self.status.set('Extracting\u2026' if execute else 'Calculating space\u2026')
@@ -235,10 +230,21 @@ class App(tk.Tk):
         display_args = ['-p********' if x.startswith('--password') else ('********' if i and args[i-1] == '--password' else x) for i, x in enumerate(args)]
         self.progress.configure(value=0); self.current.set(''); self._append('$ ' + ' '.join('"'+x+'"' if ' ' in x else x for x in display_args))
         self._set_running(True)
-        threading.Thread(target=self._worker, args=(args,), daemon=True).start()
+        threading.Thread(target=self._worker, args=(args, execute), daemon=True).start()
 
-    def _worker(self, args):
+    def _worker(self, args, check_password=True):
         try:
+            if check_password and archive_password.required(args[3], ROOT/'tools'/'7zz.exe'):
+                if Path(args[2]) not in (AGGRESSIVE, AGGRESSIVE_RAR, AGGRESSIVE_7Z):
+                    raise ValueError('Encrypted archives require aggressive mode in PeelZip.')
+                reply = queue.Queue(maxsize=1)
+                self.events.put(('password', reply))
+                password = reply.get()
+                if password is None:
+                    self.events.put(('cancelled', None))
+                    return
+                args = [*args, '--password', password]
+
             self.proc = subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, encoding='utf-8', errors='replace', bufsize=1)
             for line in self.proc.stdout:
                 self.events.put(('line', line.rstrip()))
@@ -254,7 +260,14 @@ class App(tk.Tk):
         try:
             while True:
                 kind, value = self.events.get_nowait()
-                if kind == 'line':
+                if kind == 'password':
+                    password = simpledialog.askstring('Password required', 'Enter the archive password:', show='*', parent=self)
+                    value.put(password)
+                elif kind == 'cancelled':
+                    self.proc = None
+                    self._set_running(False)
+                    self.status.set('Cancelled')
+                elif kind == 'line':
                     self._append(value)
                     m = re.search(r'\[(\d+)/(\d+)\]\s*(.*)', value)
                     if m:
