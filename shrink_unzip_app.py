@@ -19,6 +19,7 @@ AGGRESSIVE = ROOT / 'aggressive_zip.py'
 AGGRESSIVE_RAR = ROOT / 'aggressive_rar.py'
 AGGRESSIVE_7Z = ROOT / 'aggressive_7z.py'
 AGGRESSIVE_GENERIC = ROOT / 'aggressive_generic.py'
+GENERIC = ROOT / 'generic_extract.py'
 RAR = ROOT / 'rar_extract.py'
 PYTHON = sys.executable
 
@@ -120,7 +121,7 @@ class App(tk.Tk):
         if kind == '7z':
             script = AGGRESSIVE_7Z
         if kind in {'tar', 'gz', 'iso', 'cab', 'wim'}:
-            script = AGGRESSIVE_GENERIC if self.mode.get() == 'aggressive' else NORMAL
+            script = AGGRESSIVE_GENERIC if self.mode.get() == 'aggressive' else GENERIC
         if _is_zip_path(source) and self.mode.get() == 'aggressive':
             script = AGGRESSIVE
         args = [PYTHON, '-u', str(script), source, dest]
