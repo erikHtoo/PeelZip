@@ -132,7 +132,7 @@ class App(tk.Tk):
                 args += ['--resume']
             if self.mode.get() == 'aggressive' and kind == '7z' and self.resume_var.get():
                 args += ['--resume']
-            if self.mode.get() == 'aggressive' and _is_zip_path(source) and self.resume_var.get():
+            if self.mode.get() == 'aggressive' and (kind == 'zip' or _is_zip_path(source)) and self.resume_var.get():
                 args += ['--resume']
             if self.mode.get() == 'aggressive' and (_is_zip_path(source) or kind in {'rar', '7z'}) and self.password_var.get():
                 args += ['--password', self.password_var.get()]
@@ -182,4 +182,5 @@ class App(tk.Tk):
 
 
 if __name__ == '__main__': App().mainloop()
+
 
