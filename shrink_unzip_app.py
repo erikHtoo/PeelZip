@@ -10,6 +10,7 @@ import subprocess
 import sys
 import threading
 import tkinter as tk
+import archive_kind
 from tkinter import filedialog, messagebox, ttk
 
 ROOT = Path(__file__).resolve().parent
@@ -103,16 +104,19 @@ class App(tk.Tk):
             return
         source, dest = self.zip_var.get().strip(), self.dest_var.get().strip()
         if not source or not dest: messagebox.showerror('Missing path', 'Choose both an archive and destination folder.'); return
-        if Path(source).suffix.lower() == '.7z' and self.mode.get() != 'aggressive':
+        kind = archive_kind.detect(source)
+        if kind is None:
+            messagebox.showerror('Unsupported archive', 'Could not identify this file as ZIP, RAR, or 7z.'); return
+        if kind == '7z' and self.mode.get() != 'aggressive':
             messagebox.showinfo('7z mode', 'PeelZip currently supports 7z only in aggressive storage-saving mode. Use 7-Zip for ordinary extraction.')
             return
         if execute and self.mode.get() == 'aggressive':
             ok = messagebox.askyesno('Aggressive mode warning', 'This mode permanently reclaims source archive ranges. An interruption may corrupt the archive. Continue?')
             if not ok: return
         script = AGGRESSIVE if self.mode.get() == 'aggressive' else NORMAL
-        if Path(source).suffix.lower() == '.rar':
+        if kind == 'rar':
             script = AGGRESSIVE_RAR if self.mode.get() == 'aggressive' else RAR
-        if Path(source).suffix.lower() == '.7z':
+        if kind == '7z':
             script = AGGRESSIVE_7Z
         if _is_zip_path(source) and self.mode.get() == 'aggressive':
             script = AGGRESSIVE
@@ -120,17 +124,17 @@ class App(tk.Tk):
         if execute:
             if self.mode.get() == 'normal':
                 args += ['--execute', '--accept-data-loss-risk']
-            elif Path(source).suffix.lower() == '.rar' and self.verify_var.get():
+            elif kind == 'rar' and self.verify_var.get():
                 args += ['--verify']
-            elif Path(source).suffix.lower() == '.7z' and self.verify_var.get():
+            elif kind == '7z' and self.verify_var.get():
                 args += ['--verify']
-            if self.mode.get() == 'aggressive' and Path(source).suffix.lower() == '.rar' and self.resume_var.get():
+            if self.mode.get() == 'aggressive' and kind == 'rar' and self.resume_var.get():
                 args += ['--resume']
-            if self.mode.get() == 'aggressive' and Path(source).suffix.lower() == '.7z' and self.resume_var.get():
+            if self.mode.get() == 'aggressive' and kind == '7z' and self.resume_var.get():
                 args += ['--resume']
             if self.mode.get() == 'aggressive' and _is_zip_path(source) and self.resume_var.get():
                 args += ['--resume']
-            if self.mode.get() == 'aggressive' and (_is_zip_path(source) or Path(source).suffix.lower() in {'.rar', '.7z'}) and self.password_var.get():
+            if self.mode.get() == 'aggressive' and (_is_zip_path(source) or kind in {'rar', '7z'}) and self.password_var.get():
                 args += ['--password', self.password_var.get()]
         display_args = ['-p********' if x.startswith('--password') else ('********' if i and args[i-1] == '--password' else x) for i, x in enumerate(args)]
         self.progress.configure(value=0); self.current.set(''); self._append('$ ' + ' '.join('"'+x+'"' if ' ' in x else x for x in display_args))
