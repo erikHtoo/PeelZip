@@ -28,10 +28,14 @@ def find_decoder():
     return next((p for p in common if p.exists()), None)
 
 
-def inspect(source, decoder=None):
+def inspect(source, decoder=None, password=None):
     decoder = decoder or find_decoder()
     if decoder is None: raise FileNotFoundError('Install 7-Zip or WinRAR to process RAR archives')
-    result = subprocess.run([str(decoder), 'l', '-slt', '--', str(Path(source).absolute())],
+    command = [str(decoder), 'l', '-slt']
+    if password is not None:
+        command.append(f'-p{password}')
+    command += ['--', str(Path(source).absolute())]
+    result = subprocess.run(command,
                             capture_output=True, text=True, encoding='utf-8', errors='replace', check=False)
     if result.returncode not in (0, 1): raise RuntimeError(result.stderr.strip() or 'RAR listing failed')
     entries=[]; current={}
@@ -77,10 +81,12 @@ def extract(source, destination, decoder=None, progress=None):
     if code: raise RuntimeError(f'RAR decoder exited with code {code}')
 
 
-def aggressive_supported(metadata):
+def aggressive_supported(metadata, password=None):
     """Return whether metadata contains enough native range information."""
-    if metadata.get('solid') or metadata.get('multipart') or metadata.get('encrypted'):
-        return False, 'solid, multipart, and encrypted RAR archives are not eligible'
+    if metadata.get('solid') or metadata.get('multipart'):
+        return False, 'solid and multipart RAR archives are not eligible'
+    if metadata.get('encrypted') and password is None:
+        return False, 'encrypted RAR requires a password'
     if not metadata.get('entries'):
         return False, 'RAR contains no extractable entries'
     if not all('Offset' in e and 'PackSize' in e for e in metadata['entries']):

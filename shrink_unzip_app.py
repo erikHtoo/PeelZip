@@ -123,7 +123,7 @@ class App(tk.Tk):
                 args += ['--resume']
             if self.mode.get() == 'aggressive' and Path(source).suffix.lower() == '.zip' and self.resume_var.get():
                 args += ['--resume']
-            if self.mode.get() == 'aggressive' and Path(source).suffix.lower() == '.zip' and self.password_var.get():
+            if self.mode.get() == 'aggressive' and Path(source).suffix.lower() in {'.zip', '.rar', '.7z'} and self.password_var.get():
                 args += ['--password', self.password_var.get()]
         display_args = ['-p********' if x.startswith('--password') else ('********' if i and args[i-1] == '--password' else x) for i, x in enumerate(args)]
         self.progress.configure(value=0); self.current.set(''); self._append('$ ' + ' '.join('"'+x+'"' if ' ' in x else x for x in display_args))

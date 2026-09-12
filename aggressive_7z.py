@@ -37,8 +37,12 @@ def _parse_listing(text):
     return archive, entries
 
 
-def inspect(source, decoder):
-    result = subprocess.run([str(decoder), 'l', '-slt', str(source)],
+def inspect(source, decoder, password=None):
+    command = [str(decoder), 'l', '-slt']
+    if password is not None:
+        command.append(f'-p{password}')
+    command.append(str(source))
+    result = subprocess.run(command,
                             stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                             text=True, encoding='utf-8', errors='replace')
     if result.returncode:
@@ -50,7 +54,7 @@ def inspect(source, decoder):
     for entry in entries:
         if 'Block' not in entry:
             continue
-        if entry.get('Encrypted') == '+':
+        if entry.get('Encrypted') == '+' and password is None:
             raise RuntimeError('encrypted 7z archives are not supported in aggressive mode')
         if entry.get('Block') is None:
             raise RuntimeError(f'missing block metadata for {entry.get("Path", "entry")}')
@@ -123,14 +127,14 @@ def _save_state(path, state):
 
 
 def extract_aggressive(source, destination, decoder=None, progress=None,
-                       verify=False, resume=False):
+                       verify=False, resume=False, password=None):
     source = Path(source).absolute()
     destination = Path(destination).absolute()
     decoder = Path(decoder or (Path(__file__).resolve().parent / 'tools' / '7zz.exe'))
     if destination.exists() and any(destination.iterdir()) and not resume:
         raise FileExistsError(f'destination must be empty: {destination}')
     destination.mkdir(parents=True, exist_ok=True)
-    _, _, blocks = inspect(source, decoder)
+    _, _, blocks = inspect(source, decoder, password)
     archive_source = _volumes(source)[0]
     journal = _state_path(destination)
     if resume and journal.exists():
@@ -150,6 +154,8 @@ def extract_aggressive(source, destination, decoder=None, progress=None,
         if progress:
             progress(f'[{number}/{len(blocks)}] block {key}: {len(names)} file(s)')
         command = [str(decoder), 'x', '-y', f'-o{destination}', str(archive_source), *names]
+        if password is not None:
+            command.insert(3, f'-p{password}')
         result = subprocess.run(command, stdout=subprocess.PIPE,
                                 stderr=subprocess.STDOUT, text=True,
                                 encoding='utf-8', errors='replace')
@@ -182,9 +188,10 @@ def main():
     parser.add_argument('--decoder')
     parser.add_argument('--verify', action='store_true')
     parser.add_argument('--resume', action='store_true')
+    parser.add_argument('--password')
     args = parser.parse_args()
     print(extract_aggressive(args.source, args.destination, args.decoder,
-                             print, args.verify, args.resume))
+                             print, args.verify, args.resume, args.password))
 
 
 if __name__ == '__main__':
