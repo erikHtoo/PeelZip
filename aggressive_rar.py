@@ -44,6 +44,23 @@ def _load_state(path, source, entries):
     return state
 
 
+def _rar_volumes(source):
+    source = Path(source).absolute()
+    parent = source.parent
+    name = source.name
+    import re
+    m = re.match(r'^(.*)\.part(\d+)\.rar$', name, re.I)
+    if m:
+        stem, n = m.group(1), int(m.group(2))
+        candidates = sorted(parent.glob(stem + '.part*.rar'), key=lambda p: int(re.search(r'\.part(\d+)\.rar$', p.name, re.I).group(1)))
+        if candidates: return candidates
+    # Old RAR volume naming: archive.rar, archive.r00, archive.r01...
+    if source.suffix.lower() == '.rar':
+        stem = source.with_suffix('')
+        candidates = [source] + sorted(parent.glob(stem.name + '.r[0-9][0-9]'), key=lambda p: int(p.suffix[2:]))
+        if len(candidates) > 1: return candidates
+    return [source]
+
 def _save_state(path, state):
     temporary = path.with_suffix(path.suffix + '.tmp')
     temporary.write_text(json.dumps(state, indent=2, sort_keys=True), encoding='utf-8')
@@ -57,58 +74,68 @@ def extract_aggressive(source, destination, decoder=None, progress=None,
     if destination.exists() and any(destination.iterdir()) and not resume:
         raise FileExistsError(f"destination must be empty: {destination}")
     destination.mkdir(parents=True, exist_ok=True)
-    metadata = rar_backend.inspect(source, decoder, password=password)
+    volumes = _rar_volumes(source)
+    first_volume = volumes[0]
+    metadata = rar_backend.inspect(first_volume, decoder, password=password)
     supported, reason = rar_backend.aggressive_supported(metadata, password=password)
     if not supported:
-        raise RuntimeError(f"RAR aggressive mode unavailable: {reason}")
+        raise RuntimeError(f'RAR aggressive mode unavailable: {reason}')
     decoder = Path(metadata['decoder'])
     entries = metadata['entries']
+    multipart = len(volumes) > 1 or metadata.get('multipart')
+    # 7-Zip reports each entry's starting volume. For multipart archives we
+    # reclaim complete volume files only after every entry beginning there (or
+    # earlier and potentially spanning into it) has been extracted. This avoids
+    # punching holes in a volume still needed by another entry.
+    starts = []
+    for e in entries:
+        try: starts.append(int(e.get('Volume Index', 0)))
+        except (TypeError, ValueError): starts.append(0)
     journal_path = _state_path(destination)
-    state = _load_state(journal_path, source, entries) if resume else {
-        'version': 1, 'source': str(source), 'entries': {}
+    state = _load_state(journal_path, first_volume, entries) if resume else {
+        'version': 1, 'source': str(first_volume), 'entries': {}, 'volumes': [str(v) for v in volumes]
     }
     reclaimed = 0
     for number, entry in enumerate(entries, 1):
         name = entry['Path']
-        offset = entry['Offset']
-        packed = entry['PackSize']
+        packed = entry.get('PackSize', 0)
         if str(number - 1) in state['entries']:
-            if progress:
-                progress(f"[{number}/{len(entries)}] {name} (already complete)")
+            if progress: progress(f"[{number}/{len(entries)}] {name} (already complete)")
             continue
-        if progress:
-            progress(f"[{number}/{len(entries)}] {name} ({packed} compressed bytes)")
-        if dry_run:
-            continue
+        if progress: progress(f"[{number}/{len(entries)}] {name} ({packed} compressed bytes)")
+        if dry_run: continue
         command = [str(decoder), 'x', '-y', f'-o{destination}']
-        if password is not None:
-            command.append(f'-p{password}')
-        command += [str(source), name]
-        result = subprocess.run(command, stdout=subprocess.PIPE,
-                                stderr=subprocess.STDOUT, text=True,
-                                encoding='utf-8', errors='replace', check=False)
+        if password is not None: command.append(f'-p{password}')
+        command += [str(first_volume), name]
+        result = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, encoding='utf-8', errors='replace', check=False)
         if result.returncode != 0:
             raise RuntimeError(f"7zz failed for {name}: {result.stdout[-1000:]}")
         if verify and entry.get('CRC'):
             output_path = destination.joinpath(*name.replace('\\', '/').split('/'))
-            if not output_path.is_file():
-                raise RuntimeError(f"extracted file missing for verification: {name}")
-            actual = _crc32(output_path)
-            expected = str(entry['CRC']).upper()
-            if actual != expected:
-                raise RuntimeError(f"CRC mismatch for {name}: expected {expected}, got {actual}")
-        if packed:
-            ntfs_reclaim.reclaim_range(source, offset, packed)
-            reclaimed += packed
-        if not dry_run:
-            state['entries'][str(number - 1)] = {
-                'name': name, 'offset': offset, 'packed': packed,
-            }
-            _save_state(journal_path, state)
+            if not output_path.is_file(): raise RuntimeError(f'extracted file missing for verification: {name}')
+            actual = _crc32(output_path); expected = str(entry['CRC']).upper()
+            if actual != expected: raise RuntimeError(f'CRC mismatch for {name}: expected {expected}, got {actual}')
+        if multipart:
+            # Keep all volumes readable while extracting later entries. Once
+            # every file has passed CRC verification, reclaim each physical
+            # volume in one operation; the source is intentionally sacrificed.
+            state['entries'][str(number - 1)] = {'name': name, 'packed': packed, 'volume': starts[number-1]}
+        else:
+            offset = entry['Offset']
+            if packed: ntfs_reclaim.reclaim_range(first_volume, offset, packed); reclaimed += packed
+            state['entries'][str(number - 1)] = {'name': name, 'offset': entry.get('Offset'), 'packed': packed}
+        _save_state(journal_path, state)
+    if multipart and len(state['entries']) == len(entries) and not state.get('reclaimed_volumes'):
+        for vi, vol in enumerate(volumes):
+            size = vol.stat().st_size
+            if size:
+                ntfs_reclaim.reclaim_range(vol, 0, size)
+                reclaimed += size
+            state.setdefault('reclaimed_volumes', {})[str(vi)] = size
+        _save_state(journal_path, state)
     return {'entries': len(entries), 'reclaimed_bytes': reclaimed,
-            'source': str(source), 'destination': str(destination),
-            'dry_run': dry_run}
-
+            'source': str(first_volume), 'destination': str(destination),
+            'volumes': len(volumes), 'dry_run': dry_run}
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
