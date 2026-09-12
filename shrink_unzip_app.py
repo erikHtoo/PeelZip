@@ -37,9 +37,12 @@ class App(tk.Tk):
         ttk.Label(outer, text='PeelZip', font=('Segoe UI', 18, 'bold')).pack(anchor='w')
         ttk.Label(outer, text='Extract large archives while reclaiming source storage.', foreground='#555').pack(anchor='w', pady=(0, 16))
         form = ttk.LabelFrame(outer, text='Archive and destination', padding=12); form.pack(fill='x')
-        self.zip_var = tk.StringVar(); self.dest_var = tk.StringVar()
+        self.zip_var = tk.StringVar(); self.dest_var = tk.StringVar(); self.password_var = tk.StringVar()
         self._row(form, 0, 'Archive', self.zip_var, self._browse_zip)
         self._row(form, 1, 'Destination', self.dest_var, self._browse_dest)
+        ttk.Label(form, text='Password', width=12).grid(row=2,column=0,sticky='w',pady=5)
+        ttk.Entry(form, textvariable=self.password_var, show='•').grid(row=2,column=1,sticky='ew',padx=8,pady=5)
+        ttk.Label(form, text='Used only for encrypted aggressive archives.', foreground='#555').grid(row=2,column=2,sticky='w',padx=8)
         mode = ttk.LabelFrame(outer, text='Mode', padding=12); mode.pack(fill='x', pady=(14, 0))
         self.mode = tk.StringVar(value='normal')
         self.verify_var = tk.BooleanVar(value=True)
@@ -120,7 +123,10 @@ class App(tk.Tk):
                 args += ['--resume']
             if self.mode.get() == 'aggressive' and Path(source).suffix.lower() == '.zip' and self.resume_var.get():
                 args += ['--resume']
-        self.progress.configure(value=0); self.current.set(''); self._append('$ ' + ' '.join('"'+x+'"' if ' ' in x else x for x in args))
+            if self.mode.get() == 'aggressive' and Path(source).suffix.lower() == '.zip' and self.password_var.get():
+                args += ['--password', self.password_var.get()]
+        display_args = ['-p********' if x.startswith('--password') else ('********' if i and args[i-1] == '--password' else x) for i, x in enumerate(args)]
+        self.progress.configure(value=0); self.current.set(''); self._append('$ ' + ' '.join('"'+x+'"' if ' ' in x else x for x in display_args))
         self._set_running(True)
         threading.Thread(target=self._worker, args=(args,), daemon=True).start()
 

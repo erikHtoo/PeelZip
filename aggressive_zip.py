@@ -41,7 +41,8 @@ def _save_state(path, state):
     temporary.replace(path)
 
 
-def run(source, destination, decoder=None, verify=True, progress=None, resume=False):
+def run(source, destination, decoder=None, verify=True, progress=None,
+        resume=False, password=None):
     source = Path(source).absolute()
     destination = Path(destination).absolute()
     decoder = Path(decoder or (Path(__file__).resolve().parent / 'tools' / '7zz.exe'))
@@ -73,8 +74,12 @@ def run(source, destination, decoder=None, verify=True, progress=None, resume=Fa
             continue
         if progress:
             progress(f'[{number}/{len(infos)}] {info.filename}')
+        command = [str(decoder), 'x', '-y', f'-o{destination}']
+        if password is not None:
+            command.append(f'-p{password}')
+        command += [str(source), info.filename]
         result = subprocess.run(
-            [str(decoder), 'x', '-y', f'-o{destination}', str(source), info.filename],
+            command,
             stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
             text=True, encoding='utf-8', errors='replace', check=False)
         if result.returncode:
@@ -103,10 +108,11 @@ def main():
     parser.add_argument('--decoder')
     parser.add_argument('--no-verify', action='store_true')
     parser.add_argument('--resume', action='store_true')
+    parser.add_argument('--password')
     args = parser.parse_args()
     try:
         print(run(args.source, args.destination, args.decoder,
-                  not args.no_verify, print, args.resume))
+                  not args.no_verify, print, args.resume, args.password))
     except Exception as exc:
         print(f'Stopped: {exc}')
         return 1
