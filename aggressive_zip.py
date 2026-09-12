@@ -127,8 +127,11 @@ def _split_segments(volumes, offset, length):
     return segments
 
 
-def _split_entries(source, decoder):
-    result = subprocess.run([str(decoder), 'l', '-slt', str(source)],
+def _split_entries(source, decoder, password=None):
+    command = [str(decoder), 'l', '-slt']
+    if password is not None: command.append(f'-p{password}')
+    command.append(str(source))
+    result = subprocess.run(command,
                             stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                             text=True, encoding='utf-8', errors='replace')
     if result.returncode not in (0, 1):
@@ -148,7 +151,9 @@ def _split_entries(source, decoder):
         records.append(current)
     entries = []
     for item in records:
-        if not item.get('Packed Size') or item.get('Encrypted') == '+':
+        if not item.get('Packed Size'):
+            continue
+        if item.get('Encrypted') == '+' and password is None:
             continue
         entries.append({
             'filename': item['Path'], 'file_size': int(item['Size']),
@@ -191,7 +196,7 @@ def run(source, destination, decoder=None, verify=True, progress=None,
     if split:
         _validate_split_volumes(volumes, decoder)
     if split:
-        infos = _split_entries(source, decoder)
+        infos = _split_entries(source, decoder, password)
     else:
         with zipfile.ZipFile(source) as archive:
             infos = [info for info in archive.infolist() if not info.is_dir()]
