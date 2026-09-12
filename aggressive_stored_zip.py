@@ -4,6 +4,7 @@ It preserves the ZIP's logical length but deallocates verified source ranges.
 The resulting archive is intentionally no longer usable as a normal ZIP.
 """
 import argparse
+import archive_checks
 import json
 import os
 from pathlib import Path
@@ -52,6 +53,7 @@ def run(source, destination, resume=False, accept=False, chunk_size=CHUNK):
         destination.mkdir(parents=True)
         with zipfile.ZipFile(source) as z:
             infos = z.infolist()
+            archive_checks.targets(destination, [i.filename for i in infos])
             if any(i.compress_type != zipfile.ZIP_STORED for i in infos if not i.is_dir()):
                 raise ValueError('This experimental mode only supports ZIP_STORED entries; use normal mode for compressed entries')
         state_dir.mkdir()

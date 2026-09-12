@@ -8,6 +8,7 @@ from pathlib import Path
 import subprocess
 
 import ntfs_reclaim
+import archive_checks
 
 
 def _parse_listing(text):
@@ -42,7 +43,7 @@ def inspect(source, decoder, password=None):
     if password is not None:
         command.append(f'-p{password}')
     command.append(str(source))
-    result = subprocess.run(command,
+    result = subprocess.run(command, stdin=subprocess.DEVNULL,
                             stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                             text=True, encoding='utf-8', errors='replace')
     if result.returncode:
@@ -52,7 +53,7 @@ def inspect(source, decoder, password=None):
         raise RuntimeError('aggressive 7z mode requires a 7z archive')
     blocks = {}
     for entry in entries:
-        if 'Block' not in entry:
+        if not entry.get('Block'):
             continue
         if entry.get('Encrypted') == '+' and password is None:
             raise RuntimeError('encrypted 7z archives are not supported in aggressive mode')
@@ -134,7 +135,21 @@ def extract_aggressive(source, destination, decoder=None, progress=None,
     if destination.exists() and any(destination.iterdir()) and not resume:
         raise FileExistsError(f'destination must be empty: {destination}')
     destination.mkdir(parents=True, exist_ok=True)
-    _, _, blocks = inspect(source, decoder, password)
+    _, all_entries, blocks = inspect(source, decoder, password)
+    if any(e.get(k) for e in all_entries for k in ('Symbolic Link', 'Hard Link')):
+        raise ValueError('7z links are not supported')
+    archive_checks.targets(destination, [e['Path'] for e in all_entries])
+    archive_checks.ranges([(b['offset'], b['offset']+b['packed']) for b in blocks], sum(v.stat().st_size for v in _volumes(source)))
+    for e in all_entries:
+        if e.get('Block'): continue
+        target = destination.joinpath(*e['Path'].replace('\\', '/').split('/'))
+        if e.get('Folder') == '+' or e.get('Attributes', '').startswith('D'):
+            target.mkdir(parents=True, exist_ok=True)
+        elif e.get('Size') == '0':
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.touch(exist_ok=True)
+        else:
+            raise ValueError('7z entry has no extraction block')
     archive_source = _volumes(source)[0]
     journal = _state_path(destination)
     if resume and journal.exists():
@@ -148,17 +163,29 @@ def extract_aggressive(source, destination, decoder=None, progress=None,
         key = str(block['block'])
         names = [entry['Path'] for entry in block['entries']]
         if key in state['blocks']:
+            for entry in block['entries']:
+                output = destination.joinpath(*entry['Path'].replace('\\', '/').split('/'))
+                if not output.is_file() or output.stat().st_size != int(entry['Size']):
+                    raise RuntimeError('Completed 7z output missing or incomplete')
+                if entry.get('CRC') and _crc32(output) != entry['CRC'].upper():
+                    raise RuntimeError('Completed 7z output CRC mismatch')
             if progress:
                 progress(f'[{number}/{len(blocks)}] block {key} (already complete)')
             continue
         if progress:
             progress(f'[{number}/{len(blocks)}] block {key}: {len(names)} file(s)')
-        command = [str(decoder), 'x', '-y', f'-o{destination}', str(archive_source), *names]
-        if password is not None:
-            command.insert(3, f'-p{password}')
-        result = subprocess.run(command, stdout=subprocess.PIPE,
-                                stderr=subprocess.STDOUT, text=True,
-                                encoding='utf-8', errors='replace')
+        import tempfile
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.txt', encoding='utf-8', delete=False) as listing:
+            listing.write('\n'.join(names))
+            list_path = Path(listing.name)
+        try:
+            command = [str(decoder), 'x', '-y', '-spd', '-scsUTF-8', f'-o{destination}', f'-i@{list_path}']
+            if password is not None: command.append(f'-p{password}')
+            command += ['--', str(archive_source)]
+            result = subprocess.run(command, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                                    stderr=subprocess.STDOUT, text=True, encoding='utf-8', errors='replace')
+        finally:
+            list_path.unlink(missing_ok=True)
         if result.returncode:
             raise RuntimeError(f'7zz failed for block {key}: {result.stdout[-1000:]}')
         if verify:

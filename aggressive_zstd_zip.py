@@ -4,6 +4,7 @@ Streams ZIP method 93 entries, writes output, then punches consumed compressed
 ranges. It favors low peak storage over recovery after interruption.
 """
 import argparse
+import archive_checks
 import os
 from pathlib import Path
 import struct
@@ -90,6 +91,7 @@ def run(source, destination, accept=False):
     destination.mkdir(parents=True)
     with zipfile.ZipFile(source) as z:
         infos = z.infolist()
+        archive_checks.targets(destination, [i.filename for i in infos])
         if any(i.compress_type not in (zipfile.ZIP_STORED, 93) for i in infos if not i.is_dir()):
             raise ValueError('Archive contains a compression method unsupported by aggressive mode')
         for index, info in enumerate(infos):

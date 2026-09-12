@@ -18,7 +18,7 @@ def find_decoder():
     bundled = Path(__file__).resolve().parent / 'tools' / '7zz.exe'
     if bundled.exists():
         return bundled
-    candidates = ['7z.exe', '7za.exe', 'unrar.exe', 'rar.exe']
+    candidates = ['7z.exe', '7zz.exe']
     for name in candidates:
         found = shutil.which(name)
         if found: return Path(found)
@@ -35,9 +35,9 @@ def inspect(source, decoder=None, password=None):
     if password is not None:
         command.append(f'-p{password}')
     command += ['--', str(Path(source).absolute())]
-    result = subprocess.run(command,
+    result = subprocess.run(command, stdin=subprocess.DEVNULL,
                             capture_output=True, text=True, encoding='utf-8', errors='replace', check=False)
-    if result.returncode not in (0, 1): raise RuntimeError(result.stderr.strip() or 'RAR listing failed')
+    if result.returncode != 0: raise RuntimeError(result.stderr.strip() or 'RAR listing failed')
     entries=[]; current={}
     for line in result.stdout.splitlines():
         if not line.strip():
@@ -86,10 +86,12 @@ def aggressive_supported(metadata, password=None):
     archive_type = str(metadata.get('header', {}).get('Type', '')).lower()
     if archive_type not in {'rar', 'rar4', 'rar5'}:
         return False, f'archive decoder identified this as {archive_type or "an unknown format"}, not RAR'
-    if metadata.get('encrypted') and password is None:
+    if (metadata.get('encrypted') or any(e.get('Encrypted') == '+' for e in metadata.get('entries', []))) and password is None:
         return False, 'encrypted RAR requires a password'
+    if any(e.get(k) for e in metadata.get('entries', []) for k in ('Symbolic Link', 'Hard Link', 'Copy Link')):
+        return False, 'RAR links are not supported by aggressive mode'
     if not metadata.get('entries'):
         return False, 'RAR contains no extractable entries'
-    if not all('Offset' in e and 'PackSize' in e for e in metadata['entries']):
+    if not all(isinstance(e.get('Offset'), int) and isinstance(e.get('PackSize'), int) for e in metadata['entries']):
         return False, 'native RAR data offsets are unavailable from this decoder'
     return True, 'native compressed ranges available; extraction lifecycle validation required'

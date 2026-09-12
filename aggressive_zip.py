@@ -6,12 +6,19 @@ import json
 import os
 from pathlib import Path
 import struct
+import stat
 import subprocess
 import re
 import zlib
 import zipfile
+try:
+    from backports.zstd import zipfile
+except ImportError:
+    pass
 
 import ntfs_reclaim
+import archive_checks
+import zip_stream
 
 
 def _data_offset(source, info):
@@ -127,42 +134,41 @@ def _split_segments(volumes, offset, length):
     return segments
 
 
+class SplitReader:
+    """Seekable concatenated view; only requested bytes are read into memory."""
+    def __init__(self, volumes):
+        self.volumes = volumes
+        self.length = sum(p.stat().st_size for p in volumes)
+        self.position = 0
+    def seekable(self): return True
+    def tell(self): return self.position
+    def seek(self, offset, whence=0):
+        position = offset + (self.position if whence == 1 else self.length if whence == 2 else 0)
+        if position < 0: raise OSError('Negative seek')
+        self.position = position
+        return position
+    def read(self, size=-1):
+        size = max(0, self.length-self.position) if size < 0 else min(size, max(0, self.length-self.position))
+        data = _split_read(self.volumes, self.position, size)
+        self.position += len(data)
+        return data
+
+
 def _split_entries(source, decoder, password=None):
-    command = [str(decoder), 'l', '-slt']
-    if password is not None: command.append(f'-p{password}')
-    command.append(str(source))
-    result = subprocess.run(command,
-                            stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                            text=True, encoding='utf-8', errors='replace')
-    if result.returncode not in (0, 1):
-        raise RuntimeError(f'7zz split ZIP listing failed: {result.stdout[-1000:]}')
-    records = []
-    current = {}
-    for raw in result.stdout.splitlines():
-        line = raw.strip()
-        if not line:
-            if current.get('Path') and current.get('Offset') is not None:
-                records.append(current)
-            current = {}
-        elif ' = ' in line:
-            key, value = line.split(' = ', 1)
-            current[key] = value
-    if current.get('Path') and current.get('Offset') is not None:
-        records.append(current)
-    entries = []
-    for item in records:
-        if not item.get('Packed Size'):
-            continue
-        if item.get('Encrypted') == '+' and password is None:
-            continue
-        entries.append({
-            'filename': item['Path'], 'file_size': int(item['Size']),
-            'compress_size': int(item['Packed Size']),
-            'CRC': int(item['CRC'], 16), 'header_offset': int(item['Offset']),
-        })
-    if not entries:
-        raise RuntimeError('no split ZIP entries with offset metadata found')
-    return entries
+    # Never use the patched decoder's ZIP Offset property: it includes an
+    # unreliable local-header length. The ZIP directory contains exact offsets.
+    with zipfile.ZipFile(SplitReader(_split_volumes(source))) as archive:
+        result = []
+        for item in archive.infolist():
+            if item.volume:
+                raise ValueError('Disk-relative split ZIP layout is not yet supported')
+            if item.flag_bits & 1 and password is None:
+                raise ValueError('Encrypted ZIP requires a password')
+            if not item.is_dir():
+                result.append({'filename': item.filename, 'file_size': item.file_size,
+                    'compress_size': item.compress_size, 'CRC': item.CRC,
+                    'header_offset': item.header_offset})
+        return result
 
 
 def _crc32(path):
@@ -199,10 +205,16 @@ def run(source, destination, decoder=None, verify=True, progress=None,
         infos = _split_entries(source, decoder, password)
     else:
         with zipfile.ZipFile(source) as archive:
-            infos = [info for info in archive.infolist() if not info.is_dir()]
+            all_infos = archive.infolist()
+            archive_checks.targets(destination, [i.filename for i in all_infos])
+            for i in all_infos:
+                if stat.S_IFMT(i.external_attr >> 16) not in (0, stat.S_IFREG, stat.S_IFDIR):
+                    raise ValueError('ZIP links/special files are not supported')
+            infos = [info for info in all_infos if not info.is_dir()]
         infos.sort(key=lambda item: item.header_offset, reverse=True)
     if split:
         infos.sort(key=lambda item: item['header_offset'], reverse=True)
+    archive_checks.targets(destination, [i['filename'] if split else i.filename for i in infos])
     # Validate all compressed ranges before modifying the source. Overlap means
     # the decoder metadata is not a trustworthy physical map.
     ranges = []
@@ -214,6 +226,14 @@ def run(source, destination, decoder=None, verify=True, progress=None,
     for (a0, a1, an), (b0, b1, bn) in zip(sorted(ranges), sorted(ranges)[1:]):
         if b0 < a1:
             raise RuntimeError(f'overlapping compressed ranges: {an} and {bn}')
+    archive_checks.ranges([(a,b) for a,b,_ in ranges], sum(v.stat().st_size for v in volumes))
+    if not split:
+        with zipfile.ZipFile(source) as z:
+            boundary = z.start_dir
+            for i in sorted(z.infolist(), key=lambda x: x.header_offset, reverse=True):
+                if _data_offset(source, i) + i.compress_size > boundary:
+                    raise ValueError('ZIP payload overlaps a following header/directory')
+                boundary = i.header_offset
     journal_path = _state_path(destination)
     if resume and journal_path.exists():
         state = json.loads(journal_path.read_text(encoding='utf-8'))
@@ -221,7 +241,15 @@ def run(source, destination, decoder=None, verify=True, progress=None,
             raise RuntimeError('ZIP journal does not match this source archive')
     else:
         state = {'version': 1, 'source': str(source), 'entries': {}}
+    if state.get('version') != 1:
+        raise ValueError('Unknown ZIP journal version')
+    if resume and state.get('in_progress'):
+        raise RuntimeError('An interrupted streaming entry cannot resume; preserve extracted outputs.')
+    if not split:
+        for i in all_infos:
+            if i.is_dir(): destination.joinpath(*i.filename.rstrip('/').split('/')).mkdir(parents=True, exist_ok=True)
     reclaimed = 0
+    before_allocated = sum(ntfs_reclaim.allocated_bytes(v) for v in volumes)
     for number, info in enumerate(infos, 1):
         name = info['filename'] if split else info.filename
         target = destination.joinpath(*name.replace('\\', '/').split('/'))
@@ -239,12 +267,24 @@ def run(source, destination, decoder=None, verify=True, progress=None,
             continue
         if progress:
             progress(f'[{number}/{len(infos)}] {name}')
-        command = [str(decoder), 'x', '-y', f'-o{destination}']
+        if target.exists():
+            raise FileExistsError(f'Untracked output already exists: {target}')
+        if not split and not info.flag_bits & 1 and info.compress_type in (0, 8, 12, 14, getattr(zipfile, 'ZIP_ZSTANDARD', -1)):
+            state['in_progress'] = key
+            _save_state(journal_path, state)
+            reclaimed += zip_stream.extract(source, info, target, _data_offset(source, info), progress)
+            if verify and _crc32(target) != info.CRC:
+                raise RuntimeError(f'Output CRC verification failed: {name}')
+            state['entries'][key] = {'name': name, 'packed': info.compress_size}
+            state.pop('in_progress', None)
+            _save_state(journal_path, state)
+            continue
+        command = [str(decoder), 'x', '-y', '-spd', f'-o{destination}']
         if password is not None:
             command.append(f'-p{password}')
-        command += [str(volumes[0] if split else source), name]
+        command += ['--', str(volumes[0] if split else source), name]
         result = subprocess.run(
-            command,
+            command, stdin=subprocess.DEVNULL,
             stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
             text=True, encoding='utf-8', errors='replace', check=False)
         if result.returncode:
@@ -272,7 +312,8 @@ def run(source, destination, decoder=None, verify=True, progress=None,
         }
         _save_state(journal_path, state)
     return {'entries': len(infos), 'reclaimed_bytes': reclaimed,
-            'source': str(source), 'destination': str(destination)}
+            'source': str(source), 'destination': str(destination),
+            'allocated_bytes_freed': before_allocated - sum(ntfs_reclaim.allocated_bytes(v) for v in volumes)}
 
 
 def main():

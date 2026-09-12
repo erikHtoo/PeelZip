@@ -58,10 +58,10 @@ class App(tk.Tk):
         ttk.Radiobutton(mode, text='Conservative (recommended)', variable=self.mode, value='normal', command=self._mode_changed).grid(row=0,column=0,sticky='w')
         ttk.Label(mode, text='Resumable per-file extraction; keeps normal ZIP behavior until completion.', foreground='#555').grid(row=1,column=0,sticky='w',padx=25)
         ttk.Radiobutton(mode, text='Aggressive experimental', variable=self.mode, value='aggressive', command=self._mode_changed).grid(row=2,column=0,sticky='w',pady=(10,0))
-        ttk.Label(mode, text='Streams stored/Zstandard entries and reclaims source ranges; interruption can corrupt the archive.', foreground='#9b4d00', wraplength=650).grid(row=3,column=0,sticky='w',padx=25)
+        ttk.Label(mode, text='Reclaims source bytes during extraction where supported. Interrupted streaming files cannot resume.', foreground='#9b4d00', wraplength=650).grid(row=3,column=0,sticky='w',padx=25)
         ttk.Checkbutton(mode, text='Verify extracted files before reclaiming (slower, safer)', variable=self.verify_var).grid(row=4,column=0,sticky='w',padx=25,pady=(8,0))
         ttk.Label(mode, text='For aggressive RAR, checks each file CRC before its source bytes are reclaimed. Storage savings are unchanged.', foreground='#555', wraplength=650).grid(row=5,column=0,sticky='w',padx=45)
-        ttk.Checkbutton(mode, text='Resume an interrupted aggressive RAR run', variable=self.resume_var).grid(row=6,column=0,sticky='w',padx=25,pady=(6,0))
+        ttk.Checkbutton(mode, text='Resume completed files (interrupted streaming files cannot resume)', variable=self.resume_var).grid(row=6,column=0,sticky='w',padx=25,pady=(6,0))
         controls = ttk.Frame(outer); controls.pack(fill='x', pady=(14,0))
         self.preview_btn = ttk.Button(controls, text='Preview space', command=lambda: self._start(False)); self.preview_btn.pack(side='left')
         self.run_btn = ttk.Button(controls, text='Start extraction', command=lambda: self._start(True)); self.run_btn.pack(side='left', padx=8)
@@ -82,7 +82,7 @@ class App(tk.Tk):
         parent.columnconfigure(1, weight=1)
 
     def _browse_zip(self):
-        path = filedialog.askopenfilename(title='Choose archive', filetypes=[('ZIP/RAR/7z archives','*.zip *.zip.001 *.z01 *.rar *.7z'),('ZIP archives','*.zip *.zip.001 *.z01'),('RAR archives','*.rar'),('7z archives','*.7z'),('All files','*.*')])
+        path = filedialog.askopenfilename(title='Choose archive', filetypes=[('ZIP/RAR/7z archives','*.zip *.zip.001 *.z01 *.rar *.7z *.7z.001 *.tar *.gz *.iso *.cab *.wim'),('ZIP archives','*.zip *.zip.001 *.z01'),('RAR archives','*.rar'),('7z archives','*.7z'),('All files','*.*')])
         if path: self.zip_var.set(path); self._suggest_dest()
 
     def _browse_dest(self):
@@ -100,18 +100,25 @@ class App(tk.Tk):
         self.log.configure(state='normal'); self.log.insert('end', text + '\n'); self.log.see('end'); self.log.configure(state='disabled')
 
     def _start(self, execute):
-        if self.proc: return
+        if self.proc or getattr(self, 'running', False): return
         if not execute and self.mode.get() == 'aggressive':
             messagebox.showinfo('Preview unavailable', 'Aggressive mode has no safe preview because it must inspect and stream the source while reclaiming ranges. Use Conservative preview first.')
             return
         source, dest = self.zip_var.get().strip(), self.dest_var.get().strip()
         if not source or not dest: messagebox.showerror('Missing path', 'Choose both an archive and destination folder.'); return
-        kind = archive_kind.detect(source)
+        try:
+            kind = archive_kind.detect(source)
+        except OSError as exc:
+            messagebox.showerror('Cannot read archive', str(exc)); return
         if kind is None:
             messagebox.showerror('Unsupported archive', 'Could not identify this file as ZIP, RAR, or 7z.'); return
         if kind == '7z' and self.mode.get() != 'aggressive':
             messagebox.showinfo('7z mode', 'PeelZip currently supports 7z only in aggressive storage-saving mode. Use 7-Zip for ordinary extraction.')
             return
+        if kind in {'tar', 'gz', 'iso', 'cab', 'wim'} and self.mode.get() == 'aggressive':
+            messagebox.showinfo('No incremental reclamation', 'This format currently requires the full output space. Incremental aggressive extraction is not implemented.'); return
+        if not execute and kind != 'zip':
+            messagebox.showinfo('Preview unavailable', 'Space preview is currently available for conservative ZIP only.'); return
         if execute and self.mode.get() == 'aggressive':
             ok = messagebox.askyesno('Aggressive mode warning', 'This mode permanently reclaims source archive ranges. An interruption may corrupt the archive. Continue?')
             if not ok: return
@@ -122,11 +129,11 @@ class App(tk.Tk):
             script = AGGRESSIVE_7Z
         if kind in {'tar', 'gz', 'iso', 'cab', 'wim'}:
             script = AGGRESSIVE_GENERIC if self.mode.get() == 'aggressive' else GENERIC
-        if _is_zip_path(source) and self.mode.get() == 'aggressive':
+        if kind == 'zip' and self.mode.get() == 'aggressive':
             script = AGGRESSIVE
         args = [PYTHON, '-u', str(script), source, dest]
         if execute:
-            if self.mode.get() == 'normal':
+            if self.mode.get() == 'normal' and kind == 'zip':
                 args += ['--execute', '--accept-data-loss-risk']
             elif kind == 'rar' and self.verify_var.get():
                 args += ['--verify']
@@ -136,9 +143,9 @@ class App(tk.Tk):
                 args += ['--resume']
             if self.mode.get() == 'aggressive' and kind == '7z' and self.resume_var.get():
                 args += ['--resume']
-            if self.mode.get() == 'aggressive' and (kind == 'zip' or _is_zip_path(source)) and self.resume_var.get():
+            if self.mode.get() == 'aggressive' and kind == 'zip' and self.resume_var.get():
                 args += ['--resume']
-            if self.mode.get() == 'aggressive' and (_is_zip_path(source) or kind in {'rar', '7z'}) and self.password_var.get():
+            if self.mode.get() == 'aggressive' and kind in {'zip', 'rar', '7z'} and self.password_var.get():
                 args += ['--password', self.password_var.get()]
         display_args = ['-p********' if x.startswith('--password') else ('********' if i and args[i-1] == '--password' else x) for i, x in enumerate(args)]
         self.progress.configure(value=0); self.current.set(''); self._append('$ ' + ' '.join('"'+x+'"' if ' ' in x else x for x in display_args))
@@ -166,7 +173,7 @@ class App(tk.Tk):
                     self._append(value)
                     m = re.search(r'\[(\d+)/(\d+)\]\s*(.*)', value)
                     if m:
-                        self.progress.configure(value=100*int(m.group(1))/int(m.group(2))); self.current.set(m.group(3))
+                        self.progress.configure(value=100*(int(m.group(1))-1)/max(1,int(m.group(2)))); self.current.set(m.group(3))
                     elif value.startswith('ZIP:') or value.startswith('Estimated'):
                         self.status.set(value)
                     elif value.startswith('Complete'):
@@ -174,6 +181,7 @@ class App(tk.Tk):
                 elif kind == 'done':
                     code = value; self.proc = None; self._set_running(False)
                     self.status.set('Finished successfully.' if code == 0 else f'Stopped with exit code {code}.')
+                    if code == 0: self.progress.configure(value=100)
                     if code == 0: messagebox.showinfo('PeelZip', 'Operation completed.')
                 elif kind == 'error':
                     self.proc = None; self._set_running(False); self.status.set('Could not start operation.'); self._append(value); messagebox.showerror('Error', value)
@@ -181,6 +189,7 @@ class App(tk.Tk):
         self.after(100, self._poll)
 
     def _set_running(self, running):
+        self.running = running
         state = 'disabled' if running else 'normal'
         self.preview_btn.configure(state='disabled' if running else 'normal'); self.run_btn.configure(state='disabled' if running else 'normal'); self.stop_btn.configure(state='normal' if running else 'disabled')
 

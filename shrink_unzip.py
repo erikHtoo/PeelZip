@@ -97,7 +97,7 @@ class RecoveryView(io.RawIOBase):
     def seek(self, offset, whence=0):
         self.position = (0 if whence == 0 else self.position if whence == 1 else self.length) + offset
         if self.position < 0:
-            raise ValueError('Negative seek')
+            raise OSError('Negative seek')
         return self.position
 
     def read(self, size=-1):
