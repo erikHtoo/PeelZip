@@ -96,6 +96,7 @@ def extract_aggressive(source, destination, decoder=None, progress=None,
         'version': 1, 'source': str(first_volume), 'entries': {}, 'volumes': [str(v) for v in volumes]
     }
     reclaimed = 0
+    deferred_ranges = []
     for number, entry in enumerate(entries, 1):
         name = entry['Path']
         packed = entry.get('PackSize', 0)
@@ -122,8 +123,20 @@ def extract_aggressive(source, destination, decoder=None, progress=None,
             state['entries'][str(number - 1)] = {'name': name, 'packed': packed, 'volume': starts[number-1]}
         else:
             offset = entry['Offset']
-            if packed: ntfs_reclaim.reclaim_range(first_volume, offset, packed); reclaimed += packed
+            if packed:
+                if metadata.get('solid'):
+                    deferred_ranges.append((offset, packed))
+                else:
+                    ntfs_reclaim.reclaim_range(first_volume, offset, packed); reclaimed += packed
             state['entries'][str(number - 1)] = {'name': name, 'offset': entry.get('Offset'), 'packed': packed}
+        _save_state(journal_path, state)
+    if metadata.get('solid') and not multipart and len(state['entries']) == len(entries) and not state.get('reclaimed_ranges'):
+        if not deferred_ranges:
+            deferred_ranges = [(int(v['offset']), int(v['packed'])) for v in state['entries'].values() if v.get('offset') is not None and v.get('packed')]
+        for offset, packed in deferred_ranges:
+            ntfs_reclaim.reclaim_range(first_volume, offset, packed)
+            reclaimed += packed
+        state['reclaimed_ranges'] = [[o, p] for o, p in deferred_ranges]
         _save_state(journal_path, state)
     if multipart and len(state['entries']) == len(entries) and not state.get('reclaimed_volumes'):
         for vi, vol in enumerate(volumes):

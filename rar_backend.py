@@ -83,8 +83,6 @@ def extract(source, destination, decoder=None, progress=None):
 
 def aggressive_supported(metadata, password=None):
     """Return whether metadata contains enough native range information."""
-    if metadata.get('solid'):
-        return False, 'solid RAR archives are not eligible'
     if metadata.get('encrypted') and password is None:
         return False, 'encrypted RAR requires a password'
     if not metadata.get('entries'):
