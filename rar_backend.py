@@ -83,6 +83,9 @@ def extract(source, destination, decoder=None, progress=None):
 
 def aggressive_supported(metadata, password=None):
     """Return whether metadata contains enough native range information."""
+    archive_type = str(metadata.get('header', {}).get('Type', '')).lower()
+    if archive_type not in {'rar', 'rar4', 'rar5'}:
+        return False, f'archive decoder identified this as {archive_type or "an unknown format"}, not RAR'
     if metadata.get('encrypted') and password is None:
         return False, 'encrypted RAR requires a password'
     if not metadata.get('entries'):
