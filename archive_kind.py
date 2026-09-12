@@ -6,7 +6,7 @@ def detect(path):
     path = Path(path)
     try:
         with path.open("rb") as f:
-            sig = f.read(8)
+            sig = f.read(512)
     except OSError:
         sig = b""
     if sig.startswith(b"7z\xbc\xaf\x27\x1c"):
