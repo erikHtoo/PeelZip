@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import os
 from pathlib import Path
 import struct
@@ -30,20 +31,46 @@ def _crc32(path):
     return value & 0xffffffff
 
 
-def run(source, destination, decoder=None, verify=True, progress=None):
+def _state_path(destination):
+    return destination / '.peelzip-zip-state.json'
+
+
+def _save_state(path, state):
+    temporary = path.with_suffix(path.suffix + '.tmp')
+    temporary.write_text(json.dumps(state, indent=2, sort_keys=True), encoding='utf-8')
+    temporary.replace(path)
+
+
+def run(source, destination, decoder=None, verify=True, progress=None, resume=False):
     source = Path(source).absolute()
     destination = Path(destination).absolute()
     decoder = Path(decoder or (Path(__file__).resolve().parent / 'tools' / '7zz.exe'))
-    if destination.exists() and any(destination.iterdir()):
+    if destination.exists() and any(destination.iterdir()) and not resume:
         raise FileExistsError(f'destination must be empty: {destination}')
     destination.mkdir(parents=True, exist_ok=True)
     with zipfile.ZipFile(source) as archive:
         infos = [info for info in archive.infolist() if not info.is_dir()]
     infos.sort(key=lambda item: item.header_offset, reverse=True)
+    journal_path = _state_path(destination)
+    if resume and journal_path.exists():
+        state = json.loads(journal_path.read_text(encoding='utf-8'))
+        if state.get('source') != str(source):
+            raise RuntimeError('ZIP journal does not match this source archive')
+    else:
+        state = {'version': 1, 'source': str(source), 'entries': {}}
     reclaimed = 0
     for number, info in enumerate(infos, 1):
         target = destination.joinpath(*info.filename.replace('\\', '/').split('/'))
         target.parent.mkdir(parents=True, exist_ok=True)
+        key = str(info.header_offset)
+        if key in state['entries']:
+            if not target.is_file() or target.stat().st_size != info.file_size:
+                raise RuntimeError(f'completed ZIP output is missing or incomplete: {info.filename}')
+            if verify and _crc32(target) != info.CRC:
+                raise RuntimeError(f'completed ZIP output failed verification: {info.filename}')
+            if progress:
+                progress(f'[{number}/{len(infos)}] {info.filename} (already complete)')
+            continue
         if progress:
             progress(f'[{number}/{len(infos)}] {info.filename}')
         result = subprocess.run(
@@ -60,6 +87,11 @@ def run(source, destination, decoder=None, verify=True, progress=None):
         if info.compress_size:
             ntfs_reclaim.reclaim_range(source, _data_offset(source, info), info.compress_size)
             reclaimed += info.compress_size
+        state['entries'][key] = {
+            'name': info.filename, 'offset': _data_offset(source, info),
+            'packed': info.compress_size,
+        }
+        _save_state(journal_path, state)
     return {'entries': len(infos), 'reclaimed_bytes': reclaimed,
             'source': str(source), 'destination': str(destination)}
 
@@ -70,10 +102,11 @@ def main():
     parser.add_argument('destination')
     parser.add_argument('--decoder')
     parser.add_argument('--no-verify', action='store_true')
+    parser.add_argument('--resume', action='store_true')
     args = parser.parse_args()
     try:
         print(run(args.source, args.destination, args.decoder,
-                  not args.no_verify, print))
+                  not args.no_verify, print, args.resume))
     except Exception as exc:
         print(f'Stopped: {exc}')
         return 1

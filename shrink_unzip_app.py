@@ -118,6 +118,8 @@ class App(tk.Tk):
                 args += ['--resume']
             if self.mode.get() == 'aggressive' and Path(source).suffix.lower() == '.7z' and self.resume_var.get():
                 args += ['--resume']
+            if self.mode.get() == 'aggressive' and Path(source).suffix.lower() == '.zip' and self.resume_var.get():
+                args += ['--resume']
         self.progress.configure(value=0); self.current.set(''); self._append('$ ' + ' '.join('"'+x+'"' if ' ' in x else x for x in args))
         self._set_running(True)
         threading.Thread(target=self._worker, args=(args,), daemon=True).start()
