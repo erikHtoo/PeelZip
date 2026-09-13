@@ -22,7 +22,7 @@ output if a run fails. Never run a game directly from partially extracted files.
 | Concatenated `.zip.001` volumes | After each complete file | Password-protected ZipCrypto tested. Traditional disk-relative `.z01` layouts are not verified. |
 | Non-solid single-volume RAR5 | After each complete file | Custom decoder offsets required. |
 | Solid single-volume RAR5 | After each independent solid group | One giant solid group may need the entire output space. |
-| Multipart RAR | At the end | **No reduction in peak extraction space yet.** Legacy naming discovery is implemented; RAR4 decoding is unverified. |
+| Multipart RAR5 | After each complete file or solid group, across volumes | Visible headers required; password-protected payloads tested. RAR4 and encrypted headers are rejected by this path. |
 | 7z / `.7z.001` | After each complete compression group | Single giant solid group has the same peak-space limitation. |
 | TAR/GZ/ISO/CAB/WIM | Ordinary extraction only | Incremental reclamation is not implemented. Generic aggressive entry point refuses to destroy the source. |
 
@@ -64,7 +64,10 @@ ranges may free no allocation units. Source logical size generally stays the
 same; Explorer's ordinary Size field does not show sparse-file savings.
 
 Conservative ZIP preview remains available. Aggressive preview is not yet
-implemented. Generic extraction and multipart RAR need full output space.
+implemented. Generic extraction needs full output space. Multipart RAR5 needs
+room for the current file or solid group before reclaiming its compressed parts;
+one giant group still needs full output space. Headers remain allocated so later
+files can be read. No archive-sized copy is made.
 
 ## Verification and project status
 

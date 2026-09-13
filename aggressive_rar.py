@@ -16,6 +16,7 @@ import subprocess
 import ntfs_reclaim
 import rar_backend
 import archive_checks
+import rar_parts
 
 
 def _crc32(path):
@@ -80,12 +81,8 @@ def extract_aggressive(source, destination, decoder=None, progress=None,
                        dry_run=False, verify=False, resume=False, password=None):
     source = Path(source).absolute()
     destination = Path(destination).absolute()
-    if dry_run:
-        metadata = rar_backend.inspect(_rar_volumes(source)[0], decoder, password=password)
-        return {'entries': len(metadata['entries']), 'dry_run': True, 'reclaimed_bytes': 0}
-    if destination.exists() and any(destination.iterdir()) and not resume:
+    if not dry_run and destination.exists() and any(destination.iterdir()) and not resume:
         raise FileExistsError(f"destination must be empty: {destination}")
-    destination.mkdir(parents=True, exist_ok=True)
     volumes = _rar_volumes(source)
     first_volume = volumes[0]
     metadata = rar_backend.inspect(first_volume, decoder, password=password)
@@ -103,14 +100,8 @@ def extract_aggressive(source, destination, decoder=None, progress=None,
         total = metadata.get('header', {}).get('Total Physical Size')
         if total and int(total) != sum(v.stat().st_size for v in volumes):
             raise RuntimeError('RAR volume sizes do not match archive metadata')
-    # 7-Zip reports each entry's starting volume. For multipart archives we
-    # reclaim complete volume files only after every entry beginning there (or
-    # earlier and potentially spanning into it) has been extracted. This avoids
-    # punching holes in a volume still needed by another entry.
-    starts = []
-    for e in entries:
-        try: starts.append(int(e.get('Volume Index', 0)))
-        except (TypeError, ValueError): starts.append(0)
+    parts = rar_parts.payloads(volumes, entries) if multipart else [
+        [[0, int(e['Offset']), int(e['PackSize'])]] for e in entries]
     if not multipart:
         ranges = sorted((int(e['Offset']), int(e['Offset']) + int(e.get('PackSize', 0)), e['Path']) for e in entries if e.get('PackSize'))
         for (a0, a1, an), (b0, b1, bn) in zip(ranges, ranges[1:]):
@@ -118,10 +109,18 @@ def extract_aggressive(source, destination, decoder=None, progress=None,
                 raise RuntimeError(f'overlapping RAR ranges: {an} and {bn}')
     if not multipart:
         archive_checks.ranges([(a,b) for a,b,_ in ranges], source.stat().st_size)
+    if dry_run:
+        return {'entries': len(entries), 'dry_run': True, 'reclaimed_bytes': 0,
+                'volumes': len(volumes)}
+    destination.mkdir(parents=True, exist_ok=True)
     journal_path = _state_path(destination)
     state = _load_state(journal_path, first_volume, entries) if resume else {
         'version': 1, 'source': str(first_volume), 'entries': {}, 'volumes': [str(v) for v in volumes]
     }
+    mapping = {'volumes': [{'path': str(v), 'size': v.stat().st_size} for v in volumes], 'parts': parts}
+    if multipart and state.get('mapping', mapping) != mapping:
+        raise RuntimeError('RAR volume mapping differs from the resume journal')
+    state['mapping'] = mapping
     reclaimed = 0
     allocation_before = sum(ntfs_reclaim.allocated_bytes(v) for v in volumes)
     deferred_ranges = []
@@ -165,32 +164,15 @@ def extract_aggressive(source, destination, decoder=None, progress=None,
             if not output_path.is_file(): raise RuntimeError(f'extracted file missing for verification: {name}')
             actual = _crc32(output_path); expected = str(entry['CRC']).upper()
             if actual != expected: raise RuntimeError(f'CRC mismatch for {name}: expected {expected}, got {actual}')
-        if multipart:
-            # Keep all volumes readable while extracting later entries. Once
-            # every file has passed CRC verification, reclaim each physical
-            # volume in one operation; the source is intentionally sacrificed.
-            state['entries'][str(number - 1)] = {'name': name, 'packed': packed, 'volume': starts[number-1]}
-        else:
-            offset = entry['Offset']
-            if packed:
-                if metadata.get('solid'):
-                    deferred_ranges.append((offset, packed))
-                else:
-                    ntfs_reclaim.reclaim_range(first_volume, offset, packed); reclaimed += packed
-            state['entries'][str(number - 1)] = {'name': name, 'offset': entry.get('Offset'), 'packed': packed}
-        if not multipart and metadata.get('solid') and (number == len(entries) or entries[number].get('Solid') != '+'):
-            for offset, length in deferred_ranges:
-                ntfs_reclaim.reclaim_range(first_volume, offset, length)
-                reclaimed += length
+        deferred_ranges.extend(parts[number - 1])
+        state['entries'][str(number - 1)] = {'name': name, 'offset': entry.get('Offset'), 'packed': packed}
+        # A solid group must finish before any of its dictionary inputs vanish.
+        if not metadata.get('solid') or number == len(entries) or entries[number].get('Solid') != '+':
+            for vi, offset, length in deferred_ranges:
+                if length:
+                    ntfs_reclaim.reclaim_range(volumes[vi], offset, length)
+                    reclaimed += length
             deferred_ranges.clear()
-        _save_state(journal_path, state)
-    if not dry_run and multipart and len(state['entries']) == len(entries) and not state.get('reclaimed_volumes'):
-        for vi, vol in enumerate(volumes):
-            size = vol.stat().st_size
-            if size:
-                ntfs_reclaim.reclaim_range(vol, 0, size)
-                reclaimed += size
-            state.setdefault('reclaimed_volumes', {})[str(vi)] = size
         _save_state(journal_path, state)
     return {'entries': len(entries), 'reclaimed_bytes': reclaimed,
             'source': str(first_volume), 'destination': str(destination),

@@ -17,7 +17,8 @@ different from a finished, broadly validated Windows application.
 
 ## Scope limits that must remain explicit
 
-- Multipart RAR currently frees source space only at completion.
+- Multipart RAR5 reclaims per file/solid group; encrypted headers and multipart
+  RAR4 are not supported by the incremental path.
 - Solid RAR and 7z may need room for a whole compression group.
 - RAR4, AES ZIP variants, self-extractors and disk-relative split ZIP still need
   dedicated coverage. Do not advertise universal ZIP/RAR support.
@@ -27,6 +28,6 @@ different from a finished, broadly validated Windows application.
 
 ## Useful later improvements
 
-An optional standalone package, signed binaries, incremental multipart RAR,
+An optional standalone package, signed binaries, more multipart RAR variants,
 and better peak-space estimates. Power-loss recovery is not a prerequisite
 for an honestly described destructive alpha.

@@ -45,8 +45,9 @@ unsafe paths, and misleading filenames. Historical tests are included.
 
 ## Remaining limitations / release gates
 
-- Multipart RAR still releases volumes at completion, so it does not lower peak
-  storage. A header-preserving per-part native map is needed for incremental use.
+- Multipart RAR5 now uses a header-preserving physical payload map and releases
+  parts after each file/solid group. Encrypted headers and multipart RAR4 remain
+  unsupported; a single large solid group still cannot lower peak storage.
 - RAR4, encrypted multipart RAR with hidden names, true disk-relative split ZIP,
   AES ZIP variants, self-extractors, and uncommon codecs need dedicated fixtures.
 - RAR/7z recovery journals do not bind content identity or guarantee restart after
@@ -61,3 +62,14 @@ unsafe paths, and misleading filenames. Historical tests are included.
 
 The product remains experimental. The audit improves actual reclamation and
 correctness; it does not certify every archive variant or make power loss safe.
+
+## Multipart RAR follow-up — September 13
+
+53 tests and 31 subtests passed locally. Generated four-volume RAR5 fixtures
+exercise non-solid, solid, and password-encrypted payload extraction. Non-solid
+tests assert reclamation after the first of three files; solid tests assert it
+waits for all three members of the group. Output bytes match the original files,
+and every source byte outside mapped payloads remains unchanged. Each fixture
+freed about 3.1 MiB of physical allocation. This measures source space released,
+not peak additional space. Completed-run resume also passed. Missing volumes,
+encrypted headers, header CRC damage and inconsistent packed lengths are rejected.
