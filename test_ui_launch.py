@@ -52,6 +52,55 @@ class LaunchTests(unittest.TestCase):
         detect.assert_not_called()
         self.assertEqual(spawn.call_args.args[0], args)
 
+    def test_aggressive_preview_prompts_only_for_hidden_metadata(self):
+        source = Path('selected.7z')
+        args = [ui.PYTHON, '-u', str(ui.PREVIEW), str(source), 'out']
+        app = SimpleNamespace(events=Events('secret'), proc=None)
+        process = Mock(stdout=iter([]))
+        process.wait.return_value = 0
+        with patch.object(ui.space_preview, 'password_required', return_value=True), \
+             patch.object(ui.subprocess, 'Popen', return_value=process) as spawn:
+            ui.App._worker(app, args, True, source=source, script=ui.PREVIEW)
+        self.assertEqual(spawn.call_args.args[0], args + ['--password', 'secret'])
+
+    def test_real_tk_preview_button_runs_read_only(self):
+        import tempfile
+        import time
+        import zipfile
+        with tempfile.TemporaryDirectory() as d:
+            source = Path(d)/'sample.zip'
+            with zipfile.ZipFile(source, 'w') as z:
+                z.writestr('file', b'preview test')
+            before = source.read_bytes()
+            try:
+                app = ui.App()
+            except ui.tk.TclError as exc:
+                self.skipTest(str(exc))
+            app.withdraw()
+            try:
+                app.zip_var.set(str(source))
+                app.dest_var.set(str(Path(d)/'out'))
+                self.assertEqual(str(app.preview_btn['state']), 'normal')
+                with patch.object(ui.messagebox, 'askyesno', side_effect=AssertionError('Preview must not ask to destroy source')), \
+                     patch.object(ui.messagebox, 'showinfo') as show, \
+                     patch.object(ui.messagebox, 'showerror') as error:
+                    app.preview_btn.invoke()
+                    deadline = time.monotonic()+20
+                    while getattr(app, 'running', False) and time.monotonic() < deadline:
+                        app.update()
+                        time.sleep(0.02)
+                    self.assertFalse(app.running)
+                    error.assert_not_called()
+                    self.assertEqual(show.call_args.args[0], 'Space preview')
+                    self.assertEqual(app.status.get(), 'Space estimate ready')
+                self.assertEqual(source.read_bytes(), before)
+                self.assertFalse((Path(d)/'out').exists())
+            finally:
+                if app.proc and app.proc.poll() is None:
+                    app.proc.kill()
+                    app.proc.wait()
+                app.destroy()
+
 
 if __name__ == '__main__':
     unittest.main()

@@ -52,8 +52,9 @@ unsafe paths, and misleading filenames. Historical tests are included.
   AES ZIP variants, self-extractors, and uncommon codecs need dedicated fixtures.
 - RAR/7z recovery journals do not bind content identity or guarantee restart after
   partial reclamation. Their presence must not be advertised as crash safety.
-- 7z now reclaims during decoding with the bundled decoder. Exact peak-space
-  preview and per-byte GUI progress for native methods are still absent.
+- 7z now reclaims during decoding with the bundled decoder. Aggressive preview
+  provides estimates, not exact peak predictions. Per-byte GUI progress for native
+  methods is still absent.
 - Ordinary TAR/GZ/ISO/CAB/WIM extraction is not an aggressive storage-saving
   feature. TAR.GZ currently produces the intermediate TAR via 7-Zip.
 - Native source snapshot is supplied; bit-for-bit rebuild reproducibility has
@@ -91,3 +92,21 @@ validation. See STREAMING_TESTS.md for coverage and sampled space measurements.
 The full suite passed 56 tests and 38 subtests. The focused native suite was
 rerun after adding rejection of legacy partially completed solid-group journals
 and passed 3 tests and 7 subtests.
+
+## Aggressive space preview — September 14
+
+Added a read-only metadata estimator and enabled the preview button for aggressive
+ZIP/RAR/7z. Expected and cautious budgets model actual extraction order and the
+streaming/completion paths. The native binary fingerprint prevents assuming
+streaming support for an older decoder. Source reclamation is credited only on
+the destination filesystem. Sparse/already-reclaimed inputs and non-empty
+destinations are refused rather than treated as fresh extractions. Preview asks
+for a password only if metadata is encrypted. Estimates include an explicit
+heuristic reserve and are not guarantees or payload-integrity checks.
+
+Tests cover arithmetic/order, different-drive modeling, decoder fallback,
+encrypted/split metadata, unchanged source hashes and absent output directories.
+A real Tk button test runs the preview subprocess and checks its result dialog
+without triggering extraction or destructive confirmation.
+
+Full regression result: 62 tests and 42 subtests passed locally.

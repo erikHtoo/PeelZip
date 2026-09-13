@@ -8,7 +8,7 @@ HELP = {
     'verify': 'Rereads output to check its CRC. May slow extraction without reducing space savings. Decoders also check integrity. Source bytes are reclaimed during decoding; verification cannot restore them.',
     'resume': 'Skips completed work using the same destination journal. An interrupted streaming ZIP file, RAR group or 7z block cannot resume. Do not use an old journal with a new download.',
     'password': 'Enter the archive password if it is encrypted. Used in aggressive mode. The field and activity log hide it, but local process-inspection tools may see it.',
-    'preview': 'Estimates space for the conservative ZIP workflow without extracting. Currently unavailable for aggressive mode and other formats.',
+    'preview': 'Reads archive metadata without extracting. Aggressive ZIP/RAR/7z previews show estimated extra space, a cautious budget and free destination space. Compression can vary within a file, so neither figure is a guarantee. Fresh extractions only.',
     'log': 'Shows detailed progress and error messages. Useful for understanding why extraction stopped.',
 }
 

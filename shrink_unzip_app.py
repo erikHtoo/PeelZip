@@ -14,6 +14,7 @@ import archive_kind
 from ui_help import HELP, HelpButton
 from tkinter import filedialog, messagebox, simpledialog, ttk
 import archive_password
+import space_preview
 
 ROOT = Path(__file__).resolve().parent
 NORMAL = ROOT / 'shrink_unzip.py'
@@ -24,6 +25,7 @@ AGGRESSIVE_GENERIC = ROOT / 'aggressive_generic.py'
 GENERIC = ROOT / 'generic_extract.py'
 RAR = ROOT / 'rar_extract.py'
 PYTHON = sys.executable
+PREVIEW = ROOT / 'space_preview.py'
 
 
 def _is_zip_path(path):
@@ -171,16 +173,13 @@ class App(tk.Tk):
     def _mode_changed(self):
         aggressive=self.mode.get()=='aggressive'
         self.mode_hint.set('Source bytes are consumed. An interrupted run may need a new download.' if aggressive else 'ZIP source is consumed file by file. Other supported formats extract normally.')
-        self.preview_btn.configure(state='disabled' if aggressive else 'normal')
+        self.preview_btn.configure(state='disabled' if getattr(self, 'running', False) else 'normal')
 
     def _append(self, text):
         self.log.configure(state='normal'); self.log.insert('end', text + '\n'); self.log.see('end'); self.log.configure(state='disabled')
 
     def _start(self, execute):
         if self.proc or getattr(self, 'running', False): return
-        if not execute and self.mode.get() == 'aggressive':
-            messagebox.showinfo('Preview unavailable', 'Aggressive mode has no safe preview because it must inspect and stream the source while reclaiming ranges. Use Conservative preview first.')
-            return
         source, dest = self.zip_var.get().strip(), self.dest_var.get().strip()
         if not source or not dest: messagebox.showerror('Missing path', 'Choose both an archive and destination folder.'); return
         try:
@@ -194,7 +193,7 @@ class App(tk.Tk):
             return
         if kind in {'tar', 'gz', 'iso', 'cab', 'wim'} and self.mode.get() == 'aggressive':
             messagebox.showinfo('No incremental reclamation', 'This format currently requires the full output space. Incremental aggressive extraction is not implemented.'); return
-        if not execute and kind != 'zip':
+        if not execute and self.mode.get() != 'aggressive' and kind != 'zip':
             messagebox.showinfo('Preview unavailable', 'Space preview is currently available for conservative ZIP only.'); return
         if execute and self.mode.get() == 'aggressive':
             ok = messagebox.askyesno('Aggressive mode warning', 'This mode permanently reclaims source archive ranges. An interruption may corrupt the archive. Continue?')
@@ -208,6 +207,10 @@ class App(tk.Tk):
             script = AGGRESSIVE_GENERIC if self.mode.get() == 'aggressive' else GENERIC
         if kind == 'zip' and self.mode.get() == 'aggressive':
             script = AGGRESSIVE
+        if not execute and self.mode.get() == 'aggressive':
+            script = PREVIEW
+        self.preview_result = None
+        self.preview_error = None
         args = [PYTHON, '-u', str(script), source, dest]
         if execute:
             if self.mode.get() == 'normal' and kind == 'zip':
@@ -230,13 +233,14 @@ class App(tk.Tk):
         display_args = ['-p********' if x.startswith('--password') else ('********' if i and args[i-1] == '--password' else x) for i, x in enumerate(args)]
         self.progress.configure(value=0); self.current.set(''); self._append('$ ' + ' '.join('"'+x+'"' if ' ' in x else x for x in display_args))
         self._set_running(True)
-        threading.Thread(target=self._worker, args=(args, execute),
+        threading.Thread(target=self._worker, args=(args, execute or script == PREVIEW),
                          kwargs={'source': source, 'script': script}, daemon=True).start()
 
     def _worker(self, args, check_password=True, *, source, script):
         try:
-            if check_password and archive_password.required(Path(source), ROOT/'tools'/'7zz.exe'):
-                if Path(script).resolve() not in {p.resolve() for p in (AGGRESSIVE, AGGRESSIVE_RAR, AGGRESSIVE_7Z)}:
+            detect_password = space_preview.password_required if Path(script).resolve() == PREVIEW.resolve() else archive_password.required
+            if check_password and detect_password(Path(source), ROOT/'tools'/'7zz.exe'):
+                if Path(script).resolve() not in {p.resolve() for p in (AGGRESSIVE, AGGRESSIVE_RAR, AGGRESSIVE_7Z, PREVIEW)}:
                     raise ValueError('Encrypted archives require aggressive mode in PeelZip.')
                 reply = queue.Queue(maxsize=1)
                 self.events.put(('password', reply))
@@ -274,6 +278,13 @@ class App(tk.Tk):
                     self._set_running(False)
                     self.status.set('Cancelled')
                 elif kind == 'line':
+                    if value.startswith('PEELZIP_PREVIEW '):
+                        self.preview_result = json.loads(value[len('PEELZIP_PREVIEW '):])
+                        self._append(space_preview.describe(self.preview_result))
+                        continue
+                    if value.startswith('Preview unavailable: '):
+                        self.preview_error = value[len('Preview unavailable: '):]
+                        self.current.set(self.preview_error)
                     self._append(value)
                     m = re.search(r'\[(\d+)/(\d+)\]\s*(.*)', value)
                     if m:
@@ -296,7 +307,15 @@ class App(tk.Tk):
                     code = value; self.proc = None; self._set_running(False)
                     self.status.set('Finished successfully.' if code == 0 else f'Stopped with exit code {code}.')
                     if code == 0: self.progress.configure(value=100);self.percent.set('100%')
-                    if code == 0: messagebox.showinfo('PeelZip', 'Operation completed.')
+                    if code == 0:
+                        if getattr(self, 'preview_result', None) is not None:
+                            self.status.set('Space estimate ready')
+                            messagebox.showinfo('Space preview', space_preview.describe(self.preview_result))
+                        else:
+                            messagebox.showinfo('PeelZip', 'Operation completed.')
+                    elif getattr(self, 'preview_error', None):
+                        self.status.set('Preview unavailable')
+                        messagebox.showinfo('Preview unavailable', self.preview_error)
                 elif kind == 'error':
                     self.proc = None; self._set_running(False); self.status.set('Could not start operation.'); self._append(value); messagebox.showerror('Error', value)
         except queue.Empty: pass
@@ -307,7 +326,7 @@ class App(tk.Tk):
         if running: self.stop_btn.pack(side='right',padx=(8,0))
         else: self.stop_btn.pack_forget()
         state = 'disabled' if running else 'normal'
-        self.preview_btn.configure(state='disabled' if running or self.mode.get()=='aggressive' else 'normal'); self.run_btn.configure(state='disabled' if running else 'normal'); self.stop_btn.configure(state='normal' if running else 'disabled')
+        self.preview_btn.configure(state=state); self.run_btn.configure(state=state); self.stop_btn.configure(state='normal' if running else 'disabled')
 
 
 if __name__ == '__main__': App().mainloop()

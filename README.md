@@ -62,8 +62,25 @@ ZIP, RAR and 7z results distinguish requested `reclaimed_bytes` from
 ranges may free no allocation units. Source logical size generally stays the
 same; Explorer's ordinary Size field does not show sparse-file savings.
 
-Conservative ZIP preview remains available. Aggressive preview is not yet
-implemented. Generic extraction needs full output space. Streaming RAR5/7z no
+Use **Options → Preview space** for a read-only aggressive ZIP/RAR/7z estimate.
+It shows expected extra space, a cautious budget, destination free space and
+ordinary extraction space. It follows extraction order and distinguishes
+streaming from file/group reclamation. Different destination drives get no
+credit for source reclamation. Fresh, unreclaimed sources and empty destinations
+are required; a password is requested only for encrypted file listings.
+
+Expected space assumes proportional input consumption within a streaming group.
+The cautious budget waits until each file/group finishes before reclaiming it.
+Both include a heuristic allowance: 64 MiB working room, file allocation rounding,
+and potentially retained sparse boundaries. Neither is an exact maximum or a
+promise that extraction will fit. Uneven compression, filesystem behavior and
+other disk activity can change the peak. Older/unrecognized native decoders are
+estimated using the completion-based fallback. Preview does not validate payload
+integrity or consume source data. Conservative ZIP preview remains available.
+
+CLI: `py space_preview.py "D:\Downloads\archive.rar" "D:\Downloads\output"`
+
+Generic extraction needs full output space. Streaming RAR5/7z no
 longer wait for the largest file or solid group: the decoder reports compressed
 bytes already in memory and waits while PeelZip reclaims them. Output files grow
 as written instead of reserving their full size. Headers remain allocated so
