@@ -230,12 +230,13 @@ class App(tk.Tk):
         display_args = ['-p********' if x.startswith('--password') else ('********' if i and args[i-1] == '--password' else x) for i, x in enumerate(args)]
         self.progress.configure(value=0); self.current.set(''); self._append('$ ' + ' '.join('"'+x+'"' if ' ' in x else x for x in display_args))
         self._set_running(True)
-        threading.Thread(target=self._worker, args=(args, execute), daemon=True).start()
+        threading.Thread(target=self._worker, args=(args, execute),
+                         kwargs={'source': source, 'script': script}, daemon=True).start()
 
-    def _worker(self, args, check_password=True):
+    def _worker(self, args, check_password=True, *, source, script):
         try:
-            if check_password and archive_password.required(Path(args[2]), ROOT/'tools'/'7zz.exe'):
-                if Path(args[1]).resolve() not in {p.resolve() for p in (AGGRESSIVE, AGGRESSIVE_RAR, AGGRESSIVE_7Z)}:
+            if check_password and archive_password.required(Path(source), ROOT/'tools'/'7zz.exe'):
+                if Path(script).resolve() not in {p.resolve() for p in (AGGRESSIVE, AGGRESSIVE_RAR, AGGRESSIVE_7Z)}:
                     raise ValueError('Encrypted archives require aggressive mode in PeelZip.')
                 reply = queue.Queue(maxsize=1)
                 self.events.put(('password', reply))
@@ -254,7 +255,12 @@ class App(tk.Tk):
     def _stop(self):
         if self.proc and self.proc.poll() is None:
             if messagebox.askyesno('Stop extraction?', 'Stopping may leave a partial output. Resume only according to the mode documentation.'):
-                self.proc.terminate(); self.status.set('Stopping\xe2\u20ac\xa6')
+                if os.name == 'nt':
+                    subprocess.run(['taskkill', '/PID', str(self.proc.pid), '/T', '/F'],
+                                   capture_output=True)
+                else:
+                    self.proc.terminate()
+                self.status.set('Stopping...')
 
     def _poll(self):
         try:

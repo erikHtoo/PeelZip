@@ -74,6 +74,8 @@ py -m pytest -q
 ```
 
 See [AUDIT.md](AUDIT.md) for the review, actual tests and remaining limitations.
+See [RELEASE_CHECKLIST.md](RELEASE_CHECKLIST.md) for public-alpha readiness and
+[CONTRIBUTING.md](CONTRIBUTING.md) for development and bug-report instructions.
 The suite uses disposable temporary archives and real Windows reclamation.
 RAR fixture generation requires WinRAR's encoder; CI skips that fixture when
 it is unavailable. Original scripts remain for compatibility, but the desktop
