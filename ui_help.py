@@ -3,10 +3,10 @@ import tkinter as tk
 
 
 HELP = {
-    'aggressive': 'Reclaims source space during extraction where supported. ZIP can reclaim within a file; other formats may wait for a complete file or compression group. Source data is consumed. An interrupted run may require a new download.',
+    'aggressive': 'Reclaims compressed bytes while ZIP, RAR5 and 7z are decoding, including solid groups, with the bundled decoder. Other methods may wait for a file or group. An interrupted run may require a new download.',
     'normal': 'For ZIP, extracts and verifies each complete file before shrinking the source. Needs room for the current file and consumes the ZIP. Other supported formats use ordinary extraction and keep the source.',
-    'verify': 'Adds an extra CRC check of the output. It may slow extraction but does not reduce space savings. Streaming ZIP still checks CRC while decoding; the extra check cannot restore source bytes already reclaimed.',
-    'resume': 'Uses the existing journal in the same destination to skip completed work. Incomplete streaming ZIP files cannot resume. RAR and 7z recovery is limited. Do not use an old journal with a new download.',
+    'verify': 'Rereads output to check its CRC. May slow extraction without reducing space savings. Decoders also check integrity. Source bytes are reclaimed during decoding; verification cannot restore them.',
+    'resume': 'Skips completed work using the same destination journal. An interrupted streaming ZIP file, RAR group or 7z block cannot resume. Do not use an old journal with a new download.',
     'password': 'Enter the archive password if it is encrypted. Used in aggressive mode. The field and activity log hide it, but local process-inspection tools may see it.',
     'preview': 'Estimates space for the conservative ZIP workflow without extracting. Currently unavailable for aggressive mode and other formats.',
     'log': 'Shows detailed progress and error messages. Useful for understanding why extraction stopped.',

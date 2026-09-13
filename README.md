@@ -20,10 +20,9 @@ output if a run fails. Never run a game directly from partially extracted files.
 | Single ZIP/ZIP64: stored, Deflate, BZIP2, LZMA, Zstandard | During each file, with bounded read/output buffers | Streaming is for unencrypted entries. Incomplete streaming files cannot resume. |
 | ZIP with other native decoder methods or encryption | After each complete file | Needs room for the current file; uncommon methods are not broadly tested. |
 | Concatenated `.zip.001` volumes | After each complete file | Password-protected ZipCrypto tested. Traditional disk-relative `.z01` layouts are not verified. |
-| Non-solid single-volume RAR5 | After each complete file | Custom decoder offsets required. |
-| Solid single-volume RAR5 | After each independent solid group | One giant solid group may need the entire output space. |
-| Multipart RAR5 | After each complete file or solid group, across volumes | Visible headers required; password-protected payloads tested. RAR4 and encrypted headers are rejected by this path. |
-| 7z / `.7z.001` | After each complete compression group | Single giant solid group has the same peak-space limitation. |
+| Single-volume RAR5, including solid groups | During compressed-input reads | Requires the bundled streaming decoder; other decoders fall back to file/group completion. |
+| Multipart RAR5 | During compressed-input reads, across volumes | Visible headers required; password-protected payloads tested. Multipart RAR4 and encrypted headers are rejected. |
+| 7z / `.7z.001`, including solid groups | During compressed-input reads | Bundled decoder required for streaming. LZMA2, BCJ2 multi-stream, encryption and encrypted headers tested. Other decoders fall back to group completion. |
 | TAR/GZ/ISO/CAB/WIM | Ordinary extraction only | Incremental reclamation is not implemented. Generic aggressive entry point refuses to destroy the source. |
 
 Detection uses file content; a ZIP named `.rar` is treated as ZIP. Unknown
@@ -46,8 +45,8 @@ CRC pass to native decoder validation. These options do not change reclaimed
 range boundaries. Passwords use `--password`; the GUI masks its log but a CLI
 password may be visible to local process-inspection tools.
 
-`--resume` rechecks completed ZIP files. An incomplete streaming ZIP entry is
-explicitly refused. RAR/7z journals are limited progress records, not reliable
+`--resume` rechecks completed work. An incomplete streaming ZIP entry, RAR group
+or 7z block is explicitly refused. Journals are limited progress records, not reliable
 power-loss recovery. Do not substitute a new download under an old journal or
 reuse an existing destination for an unrelated archive.
 
@@ -58,16 +57,23 @@ Peak extra space depends on the extraction order, compression ratios, the
 largest file/group, and filesystem allocation. It is not automatically 20 GiB.
 Source and output should be on the same volume for reclamation to fund output.
 
-ZIP and RAR results distinguish requested `reclaimed_bytes` from
+ZIP, RAR and 7z results distinguish requested `reclaimed_bytes` from
 `allocated_bytes_freed`, measured using the Windows file-allocation API. Small
 ranges may free no allocation units. Source logical size generally stays the
 same; Explorer's ordinary Size field does not show sparse-file savings.
 
 Conservative ZIP preview remains available. Aggressive preview is not yet
-implemented. Generic extraction needs full output space. Multipart RAR5 needs
-room for the current file or solid group before reclaiming its compressed parts;
-one giant group still needs full output space. Headers remain allocated so later
-files can be read. No archive-sized copy is made.
+implemented. Generic extraction needs full output space. Streaming RAR5/7z no
+longer wait for the largest file or solid group: the decoder reports compressed
+bytes already in memory and waits while PeelZip reclaims them. Output files grow
+as written instead of reserving their full size. Headers remain allocated so
+later files can be read. No archive-sized copy is made. Decoder dictionary memory
+is still required, and highly compressed input still needs room for expansion.
+
+`streamed_bytes` in RAR/7z results counts bytes reclaimed during decoding;
+`reclaimed_bytes` also includes any remaining padding freed after validation.
+Checksums are checked after input consumption, so failure cannot restore source
+data. See [streaming test results](STREAMING_TESTS.md) for measured examples.
 
 ## Verification and project status
 

@@ -45,15 +45,15 @@ unsafe paths, and misleading filenames. Historical tests are included.
 
 ## Remaining limitations / release gates
 
-- Multipart RAR5 now uses a header-preserving physical payload map and releases
-  parts after each file/solid group. Encrypted headers and multipart RAR4 remain
-  unsupported; a single large solid group still cannot lower peak storage.
+- Multipart RAR5 uses a header-preserving physical payload map and now releases
+  decoder-consumed parts during files/solid groups. Encrypted headers and
+  multipart RAR4 remain unsupported.
 - RAR4, encrypted multipart RAR with hidden names, true disk-relative split ZIP,
   AES ZIP variants, self-extractors, and uncommon codecs need dedicated fixtures.
 - RAR/7z recovery journals do not bind content identity or guarantee restart after
   partial reclamation. Their presence must not be advertised as crash safety.
-- 7z reclamation remains at compression-group boundaries. Exact peak-space
-  preview and per-byte decoder progress for native methods are still absent.
+- 7z now reclaims during decoding with the bundled decoder. Exact peak-space
+  preview and per-byte GUI progress for native methods are still absent.
 - Ordinary TAR/GZ/ISO/CAB/WIM extraction is not an aggressive storage-saving
   feature. TAR.GZ currently produces the intermediate TAR via 7-Zip.
 - Native source snapshot is supplied; bit-for-bit rebuild reproducibility has
@@ -73,3 +73,21 @@ and every source byte outside mapped payloads remains unchanged. Each fixture
 freed about 3.1 MiB of physical allocation. This measures source space released,
 not peak additional space. Completed-run resume also passed. Missing volumes,
 encrypted headers, header CRC damage and inconsistent packed lengths are rejected.
+
+## Streaming follow-up — September 14
+
+The previous group-boundary limitation is removed for the bundled RAR5/7z
+decoder. A synchronous read-consumption protocol releases compressed bytes held
+in decoder memory. It is scoped to preflighted payloads; 7z encoded headers are
+excluded. Concurrent 7z coder input streams serialize acknowledgments. Output
+preallocation is disabled only in this mode. Adjacent consumed ranges are
+coalesced at sparse allocation boundaries to avoid retaining a unit per chunk.
+
+Active RAR groups/7z blocks are recorded before launching the decoder. An
+interrupted streaming group is refused on resume; this is not power-loss
+recovery and adds no archive backup. Source consumption precedes final checksum
+validation. See STREAMING_TESTS.md for coverage and sampled space measurements.
+
+The full suite passed 56 tests and 38 subtests. The focused native suite was
+rerun after adding rejection of legacy partially completed solid-group journals
+and passed 3 tests and 7 subtests.

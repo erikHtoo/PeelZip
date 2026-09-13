@@ -17,13 +17,14 @@ different from a finished, broadly validated Windows application.
 
 ## Scope limits that must remain explicit
 
-- Multipart RAR5 reclaims per file/solid group; encrypted headers and multipart
+- Multipart RAR5 reclaims during decoding; encrypted headers and multipart
   RAR4 are not supported by the incremental path.
-- Solid RAR and 7z may need room for a whole compression group.
+- Streaming RAR5/7z requires the bundled decoder. Other decoders fall back to
+  file/group completion and may need room for a whole compression group.
 - RAR4, AES ZIP variants, self-extractors and disk-relative split ZIP still need
   dedicated coverage. Do not advertise universal ZIP/RAR support.
 - Generic formats do not have incremental reclamation.
-- Incomplete streaming ZIP files cannot resume. Source corruption after
+- Incomplete streaming ZIP files, RAR groups and 7z blocks cannot resume. Source corruption after
   reclamation is intentional; source restoration is not promised.
 
 ## Useful later improvements

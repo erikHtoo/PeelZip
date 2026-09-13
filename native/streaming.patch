@@ -1,0 +1,174 @@
+--- a/CPP/7zip/Common/PeelRead.h
++++ b/CPP/7zip/Common/PeelRead.h
+@@ -0,0 +1,28 @@
++// PeelZip opt-in read-consumption protocol. No filesystem mutation here.
++#ifndef PEELZIP_READ_H
++#define PEELZIP_READ_H
++#include <stdio.h>
++#include <stdlib.h>
++#include <string.h>
++#include "../../Windows/Synchronization.h"
++
++inline bool PeelEnabled(const char *mode)
++{
++  const char *value = getenv("PEELZIP_READ_MODE");
++  return value && strcmp(value, mode) == 0;
++}
++
++inline HRESULT PeelConsumed(const char *mode, unsigned volume, UInt64 offset, UInt64 size)
++{
++  if (!size || !PeelEnabled(mode)) return S_OK;
++  const char *token = getenv("PEELZIP_READ_TOKEN");
++  if (!token || strlen(token) != 32) return E_FAIL;
++  // Multiple 7z coder input streams may report from different threads.
++  static NWindows::NSynchronization::CCriticalSection lock;
++  NWindows::NSynchronization::CCriticalSectionLock guard(lock);
++  if (printf("\nPEELZIP_READ %s %u %llu %llu\n", token, volume,
++      (unsigned long long)offset, (unsigned long long)size) < 0 || fflush(stdout))
++    return E_FAIL;
++  return getchar() == 'K' ? S_OK : E_ABORT;
++}
++#endif
+--- a/CPP/7zip/Archive/Rar/Rar5Handler.cpp
++++ b/CPP/7zip/Archive/Rar/Rar5Handler.cpp
+@@ -23,6 +23,7 @@
+ #include "../../Common/RegisterArc.h"
+ #include "../../Common/StreamObjects.h"
+ #include "../../Common/StreamUtils.h"
++#include "../../Common/PeelRead.h"
+ 
+ #include "../../Common/RegisterCodec.h"
+ 
+@@ -2623,6 +2624,7 @@
+   , ISequentialInStream
+ )
+   UInt64 _rem;
++  UInt64 _peelPending;
+   ISequentialInStream *_stream;
+   const CObjectVector<CArc> *_arcs;
+   const CObjectVector<CItem> *_items;
+@@ -2665,6 +2667,7 @@
+       else
+         _hash.Init_NoCalc();
+       _rem = item.PackSize;
++      _peelPending = 0;
+     }
+     {
+       UInt32 cur = size;
+@@ -2679,6 +2682,15 @@
+       data = (Byte *)data + cur;
+       size -= cur;
+       _rem -= cur;
++      _peelPending += cur;
++      if (_peelPending >= (1 << 20) || _rem == 0)
++      {
++        const CItem &item = (*_items)[_itemIndex];
++        RINOK(PeelConsumed("rar5", item.VolIndex,
++            item.GetDataPosition() + item.PackSize - _rem - _peelPending,
++            _peelPending))
++        _peelPending = 0;
++      }
+       if (_rem == 0)
+       {
+         const CItem &item = (*_items)[_itemIndex];
+--- a/CPP/7zip/Archive/7z/7zDecode.cpp
++++ b/CPP/7zip/Archive/7z/7zDecode.cpp
+@@ -6,11 +6,37 @@
+ #include "../../Common/ProgressUtils.h"
+ #include "../../Common/StreamObjects.h"
+ #include "../../Common/StreamUtils.h"
++#include "../../Common/PeelRead.h"
+ 
+ #include "7zDecode.h"
+ 
+ namespace NArchive {
+ namespace N7z {
++
++Z7_CLASS_IMP_COM_1(CPeelInStream, ISequentialInStream)
++  CMyComPtr<ISequentialInStream> _stream;
++  UInt64 _pos, _remaining, _pending;
++public:
++  void Init(ISequentialInStream *stream, UInt64 pos, UInt64 length)
++  { _stream = stream; _pos = pos; _remaining = length; _pending = 0; }
++};
++
++Z7_COM7F_IMF(CPeelInStream::Read(void *data, UInt32 size, UInt32 *processedSize))
++{
++  UInt32 done = 0;
++  HRESULT res = _stream->Read(data, size, &done);
++  if (processedSize) *processedSize = done;
++  if (done > _remaining) return E_FAIL;
++  _pos += done;
++  _remaining -= done;
++  _pending += done;
++  if (_pending >= (1 << 20) || _remaining == 0)
++  {
++    RINOK(PeelConsumed("7z", 0, _pos - _pending, _pending))
++    _pending = 0;
++  }
++  return res;
++}
+ 
+ Z7_CLASS_IMP_COM_1(
+   CDecProgress
+@@ -570,6 +596,17 @@
+     inStreams.AddNew() = streamSpec;
+     streamSpec->SetStream(packStream);
+     streamSpec->Init(packPositions[j + 1] - packPositions[j]);
++    // Decode is also used for encoded headers. Only wrap streams wholly inside
++    // the selected, preflighted payload block, never the encoded header stream.
++    const char *begin = getenv("PEELZIP_READ_START");
++    const char *end = getenv("PEELZIP_READ_END");
++    if (PeelEnabled("7z") && begin && end && packPos >= strtoull(begin, NULL, 10)
++        && startPos + packPositions[j + 1] <= strtoull(end, NULL, 10))
++    {
++      CPeelInStream *peel = new CPeelInStream;
++      peel->Init(streamSpec, packPos, packPositions[j + 1] - packPositions[j]);
++      inStreams.Back() = peel;
++    }
+   }
+   
+   const unsigned num = inStreams.Size();
+--- a/CPP/Windows/FileIO.cpp
++++ b/CPP/Windows/FileIO.cpp
+@@ -1,6 +1,7 @@
+ // Windows/FileIO.cpp
+ 
+ #include "StdAfx.h"
++#include <stdlib.h>
+ 
+ #ifdef Z7_DEVICE_FILE
+ #include "../../C/Alloc.h"
+@@ -517,7 +518,12 @@
+ }
+ 
+ bool CInFile::OpenShared(CFSTR fileName, bool shareForWrite)
+-{ return Open(fileName, FILE_SHARE_READ | (shareForWrite ? FILE_SHARE_WRITE : 0), OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL); }
++{
++  // PeelZip's parent punches only decoder-acknowledged payload ranges.
++  if (getenv("PEELZIP_READ_MODE") && getenv("PEELZIP_READ_TOKEN"))
++    shareForWrite = true;
++  return Open(fileName, FILE_SHARE_READ | (shareForWrite ? FILE_SHARE_WRITE : 0), OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL);
++}
+ 
+ bool CInFile::Open(CFSTR fileName)
+   { return OpenShared(fileName, false); }
+--- a/CPP/7zip/UI/Common/ArchiveExtractCallback.cpp
++++ b/CPP/7zip/UI/Common/ArchiveExtractCallback.cpp
+@@ -1,6 +1,7 @@
+ // ArchiveExtractCallback.cpp
+ 
+ #include "StdAfx.h"
++#include <stdlib.h>
+ 
+ #undef sprintf
+ #undef printf
+@@ -1611,7 +1612,7 @@
+   }
+   else // not reparse
+   {
+-    if (_ntOptions.PreAllocateOutFile && !_isSplit && _curSize_Defined && _curSize > (1 << 12))
++    if (!getenv("PEELZIP_READ_MODE") && _ntOptions.PreAllocateOutFile && !_isSplit && _curSize_Defined && _curSize > (1 << 12))
+     {
+       // UInt64 ticks = GetCpuTicks();
+       _fileLength_that_WasSet = _curSize;

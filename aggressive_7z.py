@@ -9,6 +9,7 @@ import subprocess
 
 import ntfs_reclaim
 import archive_checks
+import native_stream
 
 
 def _parse_listing(text):
@@ -156,9 +157,13 @@ def extract_aggressive(source, destination, decoder=None, progress=None,
         state = json.loads(journal.read_text(encoding='utf-8'))
         if state.get('source') != str(source):
             raise RuntimeError('7z journal does not match this source archive')
+        if state.get('active_block') is not None:
+            raise RuntimeError('Cannot resume an interrupted streaming 7z block; compressed input may be consumed')
     else:
         state = {'version': 1, 'source': str(source), 'blocks': {}}
     reclaimed = 0
+    streamed = 0
+    allocation_before = sum(ntfs_reclaim.allocated_bytes(v) for v in _volumes(source))
     for number, block in enumerate(blocks, 1):
         key = str(block['block'])
         names = [entry['Path'] for entry in block['entries']]
@@ -174,6 +179,10 @@ def extract_aggressive(source, destination, decoder=None, progress=None,
             continue
         if progress:
             progress(f'[{number}/{len(blocks)}] block {key}: {len(names)} file(s)')
+        segments = _physical_segments(source, block['offset'], block['packed'])
+        reclaimer = native_stream.Reclaimer(segments)
+        state['active_block'] = key
+        _save_state(journal, state)
         import tempfile
         with tempfile.NamedTemporaryFile(mode='w', suffix='.txt', encoding='utf-8', delete=False) as listing:
             listing.write('\n'.join(names))
@@ -182,29 +191,34 @@ def extract_aggressive(source, destination, decoder=None, progress=None,
             command = [str(decoder), 'x', '-y', '-spd', '-scsUTF-8', f'-o{destination}', f'-i@{list_path}']
             if password is not None: command.append(f'-p{password}')
             command += ['--', str(archive_source)]
-            result = subprocess.run(command, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
-                                    stderr=subprocess.STDOUT, text=True, encoding='utf-8', errors='replace')
+            def translate(volume, offset, length):
+                if volume != 0:
+                    raise RuntimeError('Unexpected 7z decoder stream index')
+                return _physical_segments(source, offset, length)
+            native_stream.run(command, '7z', reclaimer, translate,
+                              (block['offset'], block['offset'] + block['packed']))
+            streamed += reclaimer.reclaimed
         finally:
             list_path.unlink(missing_ok=True)
-        if result.returncode:
-            raise RuntimeError(f'7zz failed for block {key}: {result.stdout[-1000:]}')
-        if verify:
-            for entry in block['entries']:
+        for entry in block['entries']:
+            output = destination.joinpath(*entry['Path'].replace('\\', '/').split('/'))
+            if not output.is_file() or output.stat().st_size != int(entry['Size']):
+                raise RuntimeError(f'Output missing or wrong size: {entry["Path"]}')
+            if verify:
                 expected = entry.get('CRC')
-                output = destination.joinpath(*entry['Path'].replace('\\', '/').split('/'))
                 if expected and (not output.is_file() or _crc32(output) != expected.upper()):
                     raise RuntimeError(f'CRC mismatch for {entry["Path"]}')
-        segments = _physical_segments(source, block['offset'], block['packed'])
-        for volume, local_offset, segment_length in segments:
-            ntfs_reclaim.reclaim_range(volume, local_offset, segment_length)
-            reclaimed += segment_length
+        reclaimer.finish()
+        reclaimed += reclaimer.reclaimed
+        state.pop('active_block', None)
         state['blocks'][key] = {
             'offset': block['offset'], 'packed': block['packed'],
             'names': names,
             'segments': [[str(v), o, n] for v, o, n in segments],
         }
         _save_state(journal, state)
-    return {'blocks': len(blocks), 'reclaimed_bytes': reclaimed,
+    return {'blocks': len(blocks), 'reclaimed_bytes': reclaimed, 'streamed_bytes': streamed,
+            'allocated_bytes_freed': allocation_before - sum(ntfs_reclaim.allocated_bytes(v) for v in _volumes(source)),
             'source': str(source), 'destination': str(destination)}
 
 

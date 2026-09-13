@@ -79,7 +79,7 @@ class MultipartRAR(unittest.TestCase):
                 with patch.object(ntfs_reclaim, 'reclaim_range', side_effect=reclaim):
                     result = aggressive_rar.extract_aggressive(source, out, password=password, verify=True)
                 self.assertTrue(calls)
-                self.assertEqual(calls[0], 3 if solid else 1)
+                self.assertEqual(calls[0], 1, 'Even solid groups must reclaim during the first file')
                 for name, data in originals.items():
                     self.assertEqual((out/name).read_bytes(), data)
                 self.assertGreater(result['allocated_bytes_freed'], 3000000)

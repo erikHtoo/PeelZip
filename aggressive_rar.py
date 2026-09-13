@@ -1,8 +1,8 @@
-"""Experimental low-space extractor for eligible non-solid RAR archives.
+"""Experimental low-space extractor for eligible RAR archives.
 
 The native 7zz bridge exposes each RAR5 entry's compressed-data offset. This
-tool extracts one entry at a time, waits for 7zz to finish successfully, then
-returns that entry's compressed range to NTFS. The archive keeps its logical
+tool reclaims decoder-consumed RAR5 input during extraction. Other decoders
+fall back to completed file/group reclamation. The archive keeps its logical
 length but is no longer a valid normal RAR after reclamation.
 """
 from __future__ import annotations
@@ -11,12 +11,12 @@ import argparse
 import binascii
 import json
 from pathlib import Path
-import subprocess
 
 import ntfs_reclaim
 import rar_backend
 import archive_checks
 import rar_parts
+import native_stream
 
 
 def _crc32(path):
@@ -40,6 +40,8 @@ def _load_state(path, source, entries):
         raise RuntimeError(f'invalid aggressive RAR journal: {path}') from exc
     if state.get('version') != 1 or state.get('source') != str(source):
         raise RuntimeError('aggressive RAR journal does not match this source archive')
+    if state.get('active_group'):
+        raise RuntimeError('Cannot resume an interrupted streaming RAR group; compressed input may be consumed')
     known = {str(i) for i in range(len(entries))}
     if not set(state.get('entries', {})).issubset(known):
         raise RuntimeError('aggressive RAR journal contains unknown entries')
@@ -117,13 +119,24 @@ def extract_aggressive(source, destination, decoder=None, progress=None,
     state = _load_state(journal_path, first_volume, entries) if resume else {
         'version': 1, 'source': str(first_volume), 'entries': {}, 'volumes': [str(v) for v in volumes]
     }
+    # Older journals checkpointed individual members inside a solid group.
+    # Starting in the middle cannot recreate the decoder dictionary.
+    if resume and metadata.get('solid'):
+        begin = 0
+        for end in range(1, len(entries) + 1):
+            if end == len(entries) or entries[end].get('Solid') != '+':
+                done = sum(str(i) in state['entries'] for i in range(begin, end))
+                if 0 < done < end - begin:
+                    raise RuntimeError('Cannot resume a partially completed solid RAR group')
+                begin = end
     mapping = {'volumes': [{'path': str(v), 'size': v.stat().st_size} for v in volumes], 'parts': parts}
     if multipart and state.get('mapping', mapping) != mapping:
         raise RuntimeError('RAR volume mapping differs from the resume journal')
     state['mapping'] = mapping
     reclaimed = 0
     allocation_before = sum(ntfs_reclaim.allocated_bytes(v) for v in volumes)
-    deferred_ranges = []
+    group_reclaimer = None
+    streamed = 0
     for number, entry in enumerate(entries, 1):
         name = entry['Path']
         packed = entry.get('PackSize', 0)
@@ -136,13 +149,16 @@ def extract_aggressive(source, destination, decoder=None, progress=None,
             if progress: progress(f"[{number}/{len(entries)}] {name} (already complete)")
             continue
         if progress: progress(f"[{number}/{len(entries)}] {name} ({packed} compressed bytes)")
-        if dry_run: continue
         if not metadata.get('solid') or number == 1 or entry.get('Solid') != '+':
             names = [name]
             if metadata.get('solid'):
                 for following in entries[number:]:
                     if following.get('Solid') != '+': break
                     names.append(following['Path'])
+            group_parts = [part for entry_parts in parts[number-1:number-1+len(names)] for part in entry_parts]
+            group_reclaimer = native_stream.Reclaimer([(volumes[vi], o, n) for vi, o, n in group_parts])
+            state['active_group'] = names
+            _save_state(journal_path, state)
             import tempfile
             with tempfile.NamedTemporaryFile(mode='w', suffix='.txt', encoding='utf-8', delete=False) as listing:
                 listing.write('\n'.join(names))
@@ -151,9 +167,12 @@ def extract_aggressive(source, destination, decoder=None, progress=None,
                 command = [str(decoder), 'x', '-y', '-spd', '-scsUTF-8', f'-o{destination}', f'-i@{list_path}']
                 if password is not None: command.append(f'-p{password}')
                 command += ['--', str(first_volume)]
-                result = subprocess.run(command, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, encoding='utf-8', errors='replace', check=False)
-                if result.returncode != 0:
-                    raise RuntimeError(f"7zz failed for {name}: {result.stdout[-1000:]}")
+                def translate(vi, offset, length):
+                    if not 0 <= vi < len(volumes):
+                        raise RuntimeError('Decoder reported an unknown RAR volume')
+                    return [(volumes[vi], offset, length)]
+                native_stream.run(command, 'rar5', group_reclaimer, translate)
+                streamed += group_reclaimer.reclaimed
             finally:
                 list_path.unlink(missing_ok=True)
         output = destination.joinpath(*name.replace('\\', '/').split('/'))
@@ -164,17 +183,14 @@ def extract_aggressive(source, destination, decoder=None, progress=None,
             if not output_path.is_file(): raise RuntimeError(f'extracted file missing for verification: {name}')
             actual = _crc32(output_path); expected = str(entry['CRC']).upper()
             if actual != expected: raise RuntimeError(f'CRC mismatch for {name}: expected {expected}, got {actual}')
-        deferred_ranges.extend(parts[number - 1])
         state['entries'][str(number - 1)] = {'name': name, 'offset': entry.get('Offset'), 'packed': packed}
-        # A solid group must finish before any of its dictionary inputs vanish.
+        # Only unread padding/fallback decoder data remains after streaming.
         if not metadata.get('solid') or number == len(entries) or entries[number].get('Solid') != '+':
-            for vi, offset, length in deferred_ranges:
-                if length:
-                    ntfs_reclaim.reclaim_range(volumes[vi], offset, length)
-                    reclaimed += length
-            deferred_ranges.clear()
+            group_reclaimer.finish()
+            reclaimed += group_reclaimer.reclaimed
+            state.pop('active_group', None)
         _save_state(journal_path, state)
-    return {'entries': len(entries), 'reclaimed_bytes': reclaimed,
+    return {'entries': len(entries), 'reclaimed_bytes': reclaimed, 'streamed_bytes': streamed,
             'source': str(first_volume), 'destination': str(destination),
             'volumes': len(volumes), 'dry_run': dry_run,
             'allocated_bytes_freed': allocation_before - sum(ntfs_reclaim.allocated_bytes(v) for v in volumes)}
@@ -186,7 +202,7 @@ def main():
     parser.add_argument('--decoder')
     parser.add_argument('--dry-run', action='store_true')
     parser.add_argument('--verify', action='store_true',
-                        help='verify each extracted file CRC before reclaiming its RAR range')
+                        help='reread output CRC; streaming input is already consumed')
     parser.add_argument('--resume', action='store_true',
                         help='resume using the destination aggressive RAR journal')
     parser.add_argument('--password')
